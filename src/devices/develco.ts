@@ -9,6 +9,7 @@ import * as globalStore from '../lib/store';
 import * as utils from '../lib/utils';
 import * as ota from '../lib/ota';
 import {logger} from '../lib/logger';
+import {illuminance} from '../lib/modernExtend';
 const e = exposes.presets;
 const ea = exposes.access;
 
@@ -351,8 +352,14 @@ const definitions: Definition[] = [
             await reporting.rmsVoltage(endpoint, {min: constants.repInterval.MINUTES_5, change: 400}); // Limit reports to every 5m, or 4V
             await reporting.readMeteringMultiplierDivisor(endpoint);
             await reporting.currentSummDelivered(endpoint, {change: [0, 20]}); // Limit reports to once every 5m, or 0.02kWh
-            await reporting.instantaneousDemand(endpoint, {min: constants.repInterval.MINUTES_5, change: 10});
+            /*
+                seMetering.instantaneousDemand and haElectricalMeasurement.activePower both return the same thing
+                spot checks indicate both return the exact same value, no point in having both report
+            */
+            // await reporting.instantaneousDemand(endpoint, {min: constants.repInterval.MINUTES_5, change: 10});
             await reporting.acFrequency(endpoint);
+            // read develco specific attribute for sw and hw version
+            await develco.configure.read_sw_hw_version(device);
         },
         endpoint: (device) => {
             return {default: 2};
@@ -378,7 +385,13 @@ const definitions: Definition[] = [
             await reporting.rmsVoltage(endpoint, {min: constants.repInterval.MINUTES_5, change: 400}); // Limit reports to every 5m, or 4V
             await reporting.readMeteringMultiplierDivisor(endpoint);
             await reporting.currentSummDelivered(endpoint, {change: [0, 20]}); // Limit reports to once every 5m, or 0.02kWh
-            await reporting.instantaneousDemand(endpoint, {min: constants.repInterval.MINUTES_5, change: 10});
+            /*
+                seMetering.instantaneousDemand and haElectricalMeasurement.activePower both return the same thing
+                spot checks indicate both return the exact same value, no point in having both report
+            */
+            // await reporting.instantaneousDemand(endpoint, {min: constants.repInterval.MINUTES_5, change: 10});
+            // read develco specific attribute for sw and hw version
+            await develco.configure.read_sw_hw_version(device);
         },
         endpoint: (device) => {
             return {default: 2};
@@ -479,7 +492,7 @@ const definitions: Definition[] = [
         },
     },
     {
-        zigbeeModel: ['SMSZB-120'],
+        zigbeeModel: ['SMSZB-120', 'GWA1512_SmokeSensor'],
         model: 'SMSZB-120',
         vendor: 'Develco',
         description: 'Smoke detector with siren',
@@ -524,6 +537,7 @@ const definitions: Definition[] = [
         description: 'Power plug',
         fromZigbee: [fz.on_off, develco.fz.electrical_measurement, develco.fz.metering],
         toZigbee: [tz.on_off],
+        ota: ota.zigbeeOTA,
         exposes: [e.switch(), e.power(), e.current(), e.voltage(), e.energy(), e.ac_frequency()],
         configure: async (device, coordinatorEndpoint) => {
             const endpoint = device.getEndpoint(2);
@@ -586,7 +600,7 @@ const definitions: Definition[] = [
         description: 'Window sensor',
         fromZigbee: [fz.ias_contact_alarm_1, fz.battery, develco.fz.temperature],
         toZigbee: [],
-        exposes: [e.contact(), e.battery(), e.battery_low(), e.tamper(), e.temperature()],
+        exposes: [e.contact(), e.battery(), e.battery_low(), e.tamper(), e.temperature(), e.battery_voltage()],
         meta: {battery: {voltageToPercentage: '3V_2500'}},
         ota: ota.zigbeeOTA,
         configure: async (device, coordinatorEndpoint) => {
@@ -669,9 +683,10 @@ const definitions: Definition[] = [
         vendor: 'Develco',
         description: 'Motion sensor',
         fromZigbee: [
-            develco.fz.temperature, fz.illuminance, fz.ias_occupancy_alarm_1, fz.battery,
+            develco.fz.temperature, fz.ias_occupancy_alarm_1, fz.battery,
             develco.fz.led_control, develco.fz.ias_occupancy_timeout,
         ],
+        extend: [illuminance()],
         toZigbee: [develco.tz.led_control, develco.tz.ias_occupancy_timeout],
         exposes: (device, options) => {
             const dynExposes = [];
@@ -681,7 +696,6 @@ const definitions: Definition[] = [
                     withValueMin(5).withValueMax(65535));
             }
             dynExposes.push(e.temperature());
-            dynExposes.push(e.illuminance_lux());
             dynExposes.push(e.tamper());
             dynExposes.push(e.battery_low());
             dynExposes.push(e.battery());
@@ -698,11 +712,6 @@ const definitions: Definition[] = [
             return {default: 35};
         },
         configure: async (device, coordinatorEndpoint) => {
-            const endpoint39 = device.getEndpoint(39);
-            await reporting.bind(endpoint39, coordinatorEndpoint, ['msIlluminanceMeasurement']);
-            await reporting.illuminance(endpoint39,
-                {min: constants.repInterval.MINUTE, max: constants.repInterval.MINUTES_10, change: 500});
-
             const endpoint38 = device.getEndpoint(38);
             await reporting.bind(endpoint38, coordinatorEndpoint, ['msTemperatureMeasurement']);
             await reporting.temperature(endpoint38,
@@ -741,6 +750,7 @@ const definitions: Definition[] = [
         description: 'Temperature & humidity sensor',
         fromZigbee: [fz.battery, develco.fz.temperature, fz.humidity],
         toZigbee: [],
+        ota: ota.zigbeeOTA,
         exposes: [e.battery(), e.battery_low(), e.temperature(), e.humidity()],
         meta: {battery: {voltageToPercentage: '3V_2500_3200'}},
         configure: async (device, coordinatorEndpoint) => {
@@ -809,6 +819,7 @@ const definitions: Definition[] = [
         description: 'Flood alarm device ',
         fromZigbee: [fz.ias_water_leak_alarm_1, develco.fz.temperature, fz.battery],
         toZigbee: [],
+        ota: ota.zigbeeOTA,
         exposes: [e.battery_low(), e.tamper(), e.water_leak(), e.temperature(), e.battery_voltage()],
         configure: async (device, coordinatorEndpoint) => {
             const endpoint35 = device.getEndpoint(35);
@@ -849,7 +860,7 @@ const definitions: Definition[] = [
         },
     },
     {
-        zigbeeModel: ['SIRZB-110'],
+        zigbeeModel: ['SIRZB-110', 'SIRZB-111'],
         model: 'SIRZB-110',
         vendor: 'Develco',
         description: 'Customizable siren',
@@ -871,6 +882,9 @@ const definitions: Definition[] = [
         endpoint: (device) => {
             return {default: 43};
         },
+        whiteLabel: [
+            {model: 'SIRZB-111', vendor: 'Develco', description: 'Customizable siren', fingerprint: [{modelID: 'SIRZB-111'}]},
+        ],
         exposes: [e.battery(), e.battery_low(), e.test(), e.warning(), e.squawk(),
             e.numeric('max_duration', ea.ALL).withUnit('s').withValueMin(0).withValueMax(900)
                 .withDescription('Max duration of the siren'),
@@ -970,6 +984,7 @@ const definitions: Definition[] = [
         description: 'Smart button',
         fromZigbee: [fz.ewelink_action, fz.battery],
         toZigbee: [],
+        ota: ota.zigbeeOTA,
         exposes: [e.battery(), e.battery_voltage(), e.action(['single'])],
         configure: async (device, coordinatorEndpoint) => {
             const endpoint = device.getEndpoint(32);

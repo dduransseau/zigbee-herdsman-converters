@@ -3,13 +3,12 @@ import * as exposes from '../lib/exposes';
 import fz from '../converters/fromZigbee';
 import tz from '../converters/toZigbee';
 import * as legacy from '../lib/legacy';
-import * as ota from '../lib/ota';
 import * as tuya from '../lib/tuya';
 import * as reporting from '../lib/reporting';
 const e = exposes.presets;
 const ea = exposes.access;
 import * as zosung from '../lib/zosung';
-import {onOff, deviceEndpoints, actionEnumLookup} from '../lib/modernExtend';
+import {onOff, deviceEndpoints, actionEnumLookup, battery} from '../lib/modernExtend';
 const fzZosung = zosung.fzZosung;
 const tzZosung = zosung.tzZosung;
 const ez = zosung.presetsZosung;
@@ -117,7 +116,7 @@ const definitions: Definition[] = [
         exposes: (device, options) => {
             const heatingStepSize = device?.manufacturerName === '_TZE204_5toc8efa' ? 0.5 : 1;
             return [e.linkquality(), e.child_lock(), e.deadzone_temperature(), e.max_temperature_limit().withValueMax(45), e.min_temperature_limit(),
-                e.climate().withSetpoint('current_heating_setpoint', 5, 35, heatingStepSize, ea.STATE_SET)
+                e.climate().withSetpoint('current_heating_setpoint', 5, 45, heatingStepSize, ea.STATE_SET)
                     .withLocalTemperature(ea.STATE).withLocalTemperatureCalibration(-30, 30, 0.1, ea.STATE_SET)
                     .withSystemMode(['off', 'heat'], ea.STATE_SET).withRunningState(['idle', 'heat', 'cool'], ea.STATE)
                     .withPreset(['hold', 'program']),
@@ -325,18 +324,6 @@ const definitions: Definition[] = [
                 .withValueMax(900).withValueStep(1)],
     },
     {
-        fingerprint: [{modelID: 'TS130F', manufacturerName: '_TZ3000_1dd0d5yi'}],
-        model: 'MS-108ZR',
-        vendor: 'Moes',
-        description: 'Zigbee + RF curtain switch module',
-        meta: {coverInverted: true},
-        ota: ota.zigbeeOTA,
-        fromZigbee: [fz.tuya_cover_options, fz.cover_position_tilt],
-        toZigbee: [tz.cover_state, tz.moes_cover_calibration, tz.cover_position_tilt, tz.tuya_cover_reversal],
-        exposes: [e.cover_position(), e.numeric('calibration_time', ea.ALL).withValueMin(0).withValueMax(100),
-            e.enum('moving', ea.STATE, ['UP', 'STOP', 'DOWN']), e.binary('motor_reversal', ea.ALL, 'ON', 'OFF')],
-    },
-    {
         fingerprint: [{modelID: 'TS0601', manufacturerName: '_TZE200_nhyj64w2'}],
         model: 'ZTS-EUR-C',
         vendor: 'Moes',
@@ -363,17 +350,32 @@ const definitions: Definition[] = [
             fz.battery,
         ],
         toZigbee: [tzZosung.zosung_ir_code_to_send, tzZosung.zosung_learn_ir_code],
-        exposes: [ez.learn_ir_code(), ez.learned_ir_code(), ez.ir_code_to_send(), e.battery(), e.battery_voltage()],
+        exposes: (device, options) => {
+            const exposes = [ez.learn_ir_code(), ez.learned_ir_code(), ez.ir_code_to_send(), e.linkquality()];
+            if (device?.manufacturerName !== '') {
+                exposes.push(e.battery(), e.battery_voltage());
+            }
+            return exposes;
+        },
         configure: async (device, coordinatorEndpoint) => {
-            const endpoint = device.getEndpoint(1);
-            await endpoint.read('genPowerCfg', ['batteryVoltage', 'batteryPercentageRemaining']);
-            await reporting.bind(endpoint, coordinatorEndpoint, ['genPowerCfg']);
-            await reporting.batteryPercentageRemaining(endpoint);
-            await reporting.batteryVoltage(endpoint);
+            if (device.manufacturerName !== '_TZ3290_gnl5a6a5xvql7c2a') {
+                const endpoint = device.getEndpoint(1);
+                await endpoint.read('genPowerCfg', ['batteryVoltage', 'batteryPercentageRemaining']);
+                await reporting.bind(endpoint, coordinatorEndpoint, ['genPowerCfg']);
+                await reporting.batteryPercentageRemaining(endpoint);
+                await reporting.batteryVoltage(endpoint);
+            }
         },
         whiteLabel: [
-            tuya.whitelabel('TuYa', 'iH-F8260', 'Universal smart IR remote control', ['_TZ3290_gnl5a6a5xvql7c2a']),
+            tuya.whitelabel('Tuya', 'iH-F8260', 'Universal smart IR remote control', ['_TZ3290_gnl5a6a5xvql7c2a']),
         ],
+    },
+    {
+        fingerprint: tuya.fingerprint('TS0049', ['_TZ3000_cjfmu5he']),
+        model: 'ZWV-YC',
+        vendor: 'Moes',
+        description: 'Water valve',
+        extend: [battery(), onOff({powerOnBehavior: false})],
     },
     {
         fingerprint: [{modelID: 'TS0011', manufacturerName: '_TZ3000_hhiodade'}],

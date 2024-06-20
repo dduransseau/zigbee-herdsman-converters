@@ -4,7 +4,7 @@ import tz from '../converters/toZigbee';
 import * as reporting from '../lib/reporting';
 import * as ota from '../lib/ota';
 import {Definition, Fz, KeyValue} from '../lib/types';
-import {forcePowerSource, light, onOff} from '../lib/modernExtend';
+import {forcePowerSource, iasZoneAlarm, light, onOff} from '../lib/modernExtend';
 import {temperature, humidity, battery} from '../lib/modernExtend';
 
 const e = exposes.presets;
@@ -22,7 +22,8 @@ const fzLocal = {
         },
     } satisfies Fz.Converter,
     thirdreality_private_motion_sensor: {
-        cluster: 'manuSpecificUbisysDeviceSetup',
+        cluster: 'manuSpecificAssaDoorLock',
+        // This cluster ID is 0xFC00. Temporarily modify like this
         type: 'attributeReport',
         convert: (model, msg, publish, options, meta) => {
             const zoneStatus = msg.data[2];
@@ -127,6 +128,14 @@ const definitions: Definition[] = [
             device.powerSource = 'Battery';
             device.save();
         },
+    },
+    {
+        zigbeeModel: ['3RDTS01056Z'],
+        model: '3RDTS01056Z',
+        vendor: 'Third Reality',
+        description: 'Garage door tilt sensor',
+        extend: [battery(), iasZoneAlarm({zoneType: 'contact', zoneAttributes: ['alarm_1', 'battery_low']})],
+        ota: ota.zigbeeOTA,
     },
     {
         zigbeeModel: ['3RSP019BZ'],

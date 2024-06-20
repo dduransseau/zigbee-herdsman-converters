@@ -2,23 +2,24 @@ import {Fz, Tz, OnEvent, Configure, KeyValue, Range, ModernExtend, Expose, KeyVa
 import {presets, access, options} from '../lib/exposes';
 import {
     postfixWithEndpointName, precisionRound, isObject, replaceInArray, isLegacyEnabled, hasAlreadyProcessedMessage,
-    getFromLookup, mapNumberRange, getEndpointName,
+    assertString, getFromLookup, mapNumberRange, getEndpointName,
 } from '../lib/utils';
 import {
-    LightArgs, light as lightDontUse, ota, setupAttributes, ReportingConfigWithoutAttribute,
+    LightArgs, light as lightDontUse, ota, ReportingConfigWithoutAttribute,
     timeLookup, numeric, NumericArgs, setupConfigureForBinding,
+    setupConfigureForReporting, deviceAddCustomCluster,
 } from '../lib/modernExtend';
+
 import {tradfri as ikea} from '../lib/ota';
 
-import fz from '../converters/fromZigbee';
 import tz from '../converters/toZigbee';
 import * as constants from '../lib/constants';
 import * as reporting from '../lib/reporting';
 import * as globalStore from '../lib/store';
-import * as zigbeeHerdsman from 'zigbee-herdsman/dist';
+import {Zcl} from 'zigbee-herdsman';
 import * as semver from 'semver';
 
-export const manufacturerOptions = {manufacturerCode: zigbeeHerdsman.Zcl.ManufacturerCode.IKEA_OF_SWEDEN};
+export const manufacturerOptions = {manufacturerCode: Zcl.ManufacturerCode.IKEA_OF_SWEDEN};
 
 const bulbOnEvent: OnEvent = async (type, data, device, options, state: KeyValue) => {
     /**
@@ -45,11 +46,11 @@ const bulbOnEvent: OnEvent = async (type, data, device, options, state: KeyValue
         //       we only restore if true, to save unneeded network writes
         const colorOptions = state.color_options as KeyValue;
         if (colorOptions?.execute_if_off === true) {
-            device.endpoints[0].write('lightingColorCtrl', {'options': 1});
+            await device.endpoints[0].write('lightingColorCtrl', {'options': 1});
         }
         const levelConfig = state.level_config as KeyValue;
         if (levelConfig?.execute_if_off === true) {
-            device.endpoints[0].write('genLevelCtrl', {'options': 1});
+            await device.endpoints[0].write('genLevelCtrl', {'options': 1});
         }
         if (levelConfig?.on_level !== undefined) {
             const onLevelRaw = levelConfig.on_level;
@@ -62,7 +63,7 @@ const bulbOnEvent: OnEvent = async (type, data, device, options, state: KeyValue
             if (onLevel > 255) onLevel = 254;
             if (onLevel < 1) onLevel = 1;
 
-            device.endpoints[0].write('genLevelCtrl', {onLevel: onLevel});
+            await device.endpoints[0].write('genLevelCtrl', {onLevel: onLevel});
         }
     }
 };
@@ -100,15 +101,21 @@ export function ikeaBattery(): ModernExtend {
             if (msg.data.hasOwnProperty('batteryPercentageRemaining') && (msg.data['batteryPercentageRemaining'] < 255)) {
                 // Some devices do not comply to the ZCL and report a
                 // batteryPercentageRemaining of 100 when the battery is full (should be 200).
-                //
-                // IKEA corrected this on newer remote fw version, but many people are still
-                // 2.2.010 which is the last version supporting group bindings. We try to be
-                // smart and pick the correct one for IKEA remotes.
                 let dividePercentage = true;
-                // If softwareBuildID is below 2.4.0 it should not be divided
-                if (semver.lt(meta.device.softwareBuildID, '2.4.0', true)) {
-                    dividePercentage = false;
+                if (model.model === 'E2103') {
+                    if (semver.lt(meta.device.softwareBuildID, '24.4.13', true)) {
+                        dividePercentage = false;
+                    }
+                } else {
+                    // IKEA corrected this on newer remote fw version, but many people are still
+                    // 2.2.010 which is the last version supporting group bindings. We try to be
+                    // smart and pick the correct one for IKEA remotes.
+                    // If softwareBuildID is below 2.4.0 it should not be divided
+                    if (semver.lt(meta.device.softwareBuildID, '2.4.0', true)) {
+                        dividePercentage = false;
+                    }
                 }
+
                 let percentage = msg.data['batteryPercentageRemaining'];
                 percentage = dividePercentage ? percentage / 2 : percentage;
                 payload.battery = precisionRound(percentage, 2);
@@ -127,26 +134,40 @@ export function ikeaBattery(): ModernExtend {
 
     const defaultReporting: ReportingConfigWithoutAttribute = {min: '1_HOUR', max: 'MAX', change: 10};
 
-    const configure: Configure = async (device, coordinatorEndpoint) => {
-        await setupAttributes(device, coordinatorEndpoint, 'genPowerCfg', [
-            {attribute: 'batteryPercentageRemaining', ...defaultReporting},
-        ]);
-    };
+    const configure: Configure[] = [
+        setupConfigureForReporting('genPowerCfg', 'batteryPercentageRemaining', defaultReporting, access.STATE_GET),
+    ];
 
     return {exposes, fromZigbee, toZigbee, configure, isModernExtend: true};
 }
 
+export function ikeaConfigureStyrbar(): ModernExtend {
+    const configure: Configure[] = [
+        async (device, coordinatorEndpoint, definition) => {
+            // https://github.com/Koenkk/zigbee2mqtt/issues/15725
+            if (semver.gte(device.softwareBuildID, '2.4.0', true)) {
+                const endpoint = device.getEndpoint(1);
+                await reporting.bind(endpoint, coordinatorEndpoint, ['genOnOff', 'genLevelCtrl', 'genScenes']);
+            }
+        },
+    ];
+
+    return {configure, isModernExtend: true};
+}
+
 export function ikeaConfigureRemote(): ModernExtend {
-    const configure: Configure = async (device, coordinatorEndpoint) => {
-        // Firmware 2.3.075 >= only supports binding to endpoint, before only to group
-        // - https://github.com/Koenkk/zigbee2mqtt/issues/2772#issuecomment-577389281
-        // - https://github.com/Koenkk/zigbee2mqtt/issues/7716
-        const endpoint = device.getEndpoint(1);
-        const version = device.softwareBuildID.split('.').map((n) => Number(n));
-        const bindTarget = version[0] > 2 || (version[0] == 2 && version[1] > 3) || (version[0] == 2 && version[1] == 3 && version[2] >= 75) ?
-            coordinatorEndpoint : constants.defaultBindGroup;
-        await endpoint.bind('genOnOff', bindTarget);
-    };
+    const configure: Configure[] = [
+        async (device, coordinatorEndpoint, definition) => {
+            // Firmware 2.3.075 >= only supports binding to endpoint, before only to group
+            // - https://github.com/Koenkk/zigbee2mqtt/issues/2772#issuecomment-577389281
+            // - https://github.com/Koenkk/zigbee2mqtt/issues/7716
+            const endpoint = device.getEndpoint(1);
+            const version = device.softwareBuildID.split('.').map((n) => Number(n));
+            const bindTarget = version[0] > 2 || (version[0] == 2 && version[1] > 3) || (version[0] == 2 && version[1] == 3 && version[2] >= 75) ?
+                coordinatorEndpoint : constants.defaultBindGroup;
+            await endpoint.bind('genOnOff', bindTarget);
+        },
+    ];
 
     return {configure, isModernExtend: true};
 }
@@ -164,7 +185,7 @@ export function ikeaAirPurifier(): ModernExtend {
             'unknown',
         ]).withDescription('Calculated air quality'),
         presets.binary('led_enable', access.ALL, true, false).withDescription('Controls the LED').withCategory('config'),
-        presets.binary('child_lock', access.ALL, true, false).withDescription('Controls physical input on the device').withCategory('config'),
+        presets.binary('child_lock', access.ALL, 'LOCK', 'UNLOCK').withDescription('Controls physical input on the device').withCategory('config'),
         presets.binary('replace_filter', access.STATE_GET, true, false)
             .withDescription('Indicates if the filter is older than 6 months and needs replacing')
             .withCategory('diagnostic'),
@@ -222,7 +243,7 @@ export function ikeaAirPurifier(): ModernExtend {
                 }
 
                 if (msg.data.hasOwnProperty('childLock')) {
-                    state['child_lock'] = (msg.data['childLock'] == 0);
+                    state['child_lock'] = ((msg.data['childLock'] == 0) ? 'UNLOCK' : 'LOCK');
                 }
 
                 if (msg.data.hasOwnProperty('fanSpeed')) {
@@ -305,8 +326,9 @@ export function ikeaAirPurifier(): ModernExtend {
         {
             key: ['child_lock'],
             convertSet: async (entity, key, value, meta) => {
-                await entity.write('manuSpecificIkeaAirPurifier', {'childLock': ((value) ? 0 : 1)}, manufacturerOptions);
-                return {state: {child_lock: ((value) ? true : false)}};
+                assertString(value);
+                await entity.write('manuSpecificIkeaAirPurifier', {'childLock': ((value.toLowerCase() === 'unlock') ? 0 : 1)}, manufacturerOptions);
+                return {state: {child_lock: ((value.toLowerCase() === 'lock') ? 'LOCK' : 'UNLOCK')}};
             },
             convertGet: async (entity, key, meta) => {
                 await entity.read('manuSpecificIkeaAirPurifier', ['childLock']);
@@ -324,25 +346,27 @@ export function ikeaAirPurifier(): ModernExtend {
         },
     ];
 
-    const configure: Configure = async (device, coordinatorEndpoint) => {
-        const endpoint = device.getEndpoint(1);
+    const configure: Configure[] = [
+        async (device, coordinatorEndpoint, definition) => {
+            const endpoint = device.getEndpoint(1);
 
-        await reporting.bind(endpoint, coordinatorEndpoint, ['manuSpecificIkeaAirPurifier']);
-        await endpoint.configureReporting('manuSpecificIkeaAirPurifier', [{attribute: 'particulateMatter25Measurement',
-            minimumReportInterval: timeLookup['1_MINUTE'], maximumReportInterval: timeLookup['1_HOUR'], reportableChange: 1}],
-        manufacturerOptions);
-        await endpoint.configureReporting('manuSpecificIkeaAirPurifier', [{attribute: 'filterRunTime',
-            minimumReportInterval: timeLookup['1_HOUR'], maximumReportInterval: timeLookup['1_HOUR'], reportableChange: 0}],
-        manufacturerOptions);
-        await endpoint.configureReporting('manuSpecificIkeaAirPurifier', [{attribute: 'fanMode',
-            minimumReportInterval: 0, maximumReportInterval: timeLookup['1_HOUR'], reportableChange: 1}],
-        manufacturerOptions);
-        await endpoint.configureReporting('manuSpecificIkeaAirPurifier', [{attribute: 'fanSpeed',
-            minimumReportInterval: 0, maximumReportInterval: timeLookup['1_HOUR'], reportableChange: 1}],
-        manufacturerOptions);
+            await reporting.bind(endpoint, coordinatorEndpoint, ['manuSpecificIkeaAirPurifier']);
+            await endpoint.configureReporting('manuSpecificIkeaAirPurifier', [{attribute: 'particulateMatter25Measurement',
+                minimumReportInterval: timeLookup['1_MINUTE'], maximumReportInterval: timeLookup['1_HOUR'], reportableChange: 1}],
+            manufacturerOptions);
+            await endpoint.configureReporting('manuSpecificIkeaAirPurifier', [{attribute: 'filterRunTime',
+                minimumReportInterval: timeLookup['1_HOUR'], maximumReportInterval: timeLookup['1_HOUR'], reportableChange: 0}],
+            manufacturerOptions);
+            await endpoint.configureReporting('manuSpecificIkeaAirPurifier', [{attribute: 'fanMode',
+                minimumReportInterval: 0, maximumReportInterval: timeLookup['1_HOUR'], reportableChange: 1}],
+            manufacturerOptions);
+            await endpoint.configureReporting('manuSpecificIkeaAirPurifier', [{attribute: 'fanSpeed',
+                minimumReportInterval: 0, maximumReportInterval: timeLookup['1_HOUR'], reportableChange: 1}],
+            manufacturerOptions);
 
-        await endpoint.read('manuSpecificIkeaAirPurifier', ['controlPanelLight', 'childLock', 'filterRunTime']);
-    };
+            await endpoint.read('manuSpecificIkeaAirPurifier', ['controlPanelLight', 'childLock', 'filterRunTime']);
+        },
+    ];
 
     return {exposes, fromZigbee, toZigbee, configure, isModernExtend: true};
 }
@@ -351,7 +375,7 @@ export function ikeaVoc(args?: Partial<NumericArgs>) {
     return numeric({
         name: 'voc_index',
         label: 'VOC index',
-        cluster: 'msIkeaVocIndexMeasurement',
+        cluster: 'manuSpecificIkeaVocIndexMeasurement',
         attribute: 'measuredValue',
         reporting: {min: '1_MINUTE', max: '2_MINUTES', change: 1},
         description: 'Sensirion VOC index',
@@ -362,12 +386,14 @@ export function ikeaVoc(args?: Partial<NumericArgs>) {
 
 export function ikeaConfigureGenPollCtrl(args?: {endpointId: number}): ModernExtend {
     args = {endpointId: 1, ...args};
-    const configure: Configure = async (device, coordinatorEndpoint) => {
-        const endpoint = device.getEndpoint(args.endpointId);
-        if (Number(device?.softwareBuildID?.split('.')[0]) >= 24) {
-            await endpoint.write('genPollCtrl', {'checkinInterval': 172800});
-        }
-    };
+    const configure: Configure[] = [
+        async (device, coordinatorEndpoint, definition) => {
+            const endpoint = device.getEndpoint(args.endpointId);
+            if (Number(device?.softwareBuildID?.split('.')[0]) >= 24) {
+                await endpoint.write('genPollCtrl', {'checkinInterval': 172800});
+            }
+        },
+    ];
 
     return {configure, isModernExtend: true};
 }
@@ -542,16 +568,13 @@ export function ikeaDotsClick(args: {actionLookup?: KeyValue, dotsPrefix?: boole
         },
     ];
 
-    const configure: Configure = setupConfigureForBinding('tradfriButton', args.endpointNames);
+    const configure: Configure[] = [setupConfigureForBinding('tradfriButton', 'output', args.endpointNames)];
 
     return {exposes, fromZigbee, configure, isModernExtend: true};
 }
 
-export function ikeaArrowClick(args?: {styrbar: boolean}): ModernExtend {
-    args = {
-        styrbar: false,
-        ...args,
-    };
+export function ikeaArrowClick(args?: {styrbar?: boolean, bind?: boolean}): ModernExtend {
+    args = {styrbar: false, bind: true, ...args};
     const actions = ['arrow_left_click', 'arrow_left_hold', 'arrow_left_release',
         'arrow_right_click', 'arrow_right_hold', 'arrow_right_release'];
     const exposes: Expose[] = [presets.action(actions)];
@@ -566,6 +589,16 @@ export function ikeaArrowClick(args?: {styrbar: boolean}): ModernExtend {
 
                 const direction = msg.data.value === 257 ? 'left' : 'right';
                 return {action: `arrow_${direction}_click`};
+            },
+        },
+        {
+            cluster: 'genScenes',
+            type: 'commandTradfriArrowHold',
+            convert: (model, msg, publish, options, meta) => {
+                if (hasAlreadyProcessedMessage(msg, model)) return;
+                const direction = msg.data.value === 3329 ? 'left' : 'right';
+                globalStore.putValue(msg.endpoint, 'direction', direction);
+                return {action: `arrow_${direction}_hold`};
             },
         },
         {
@@ -587,9 +620,11 @@ export function ikeaArrowClick(args?: {styrbar: boolean}): ModernExtend {
         },
     ];
 
-    const configure: Configure = setupConfigureForBinding('genScenes');
+    const result: ModernExtend = {exposes, fromZigbee, isModernExtend: true};
 
-    return {exposes, fromZigbee, configure, isModernExtend: true};
+    if (args.bind) result.configure = [setupConfigureForBinding('genScenes', 'output')];
+
+    return result;
 }
 
 export function ikeaMediaCommands(): ModernExtend {
@@ -627,9 +662,65 @@ export function ikeaMediaCommands(): ModernExtend {
         },
     ];
 
-    const configure: Configure = setupConfigureForBinding('genLevelCtrl');
+    const configure: Configure[] = [setupConfigureForBinding('genLevelCtrl', 'output')];
 
     return {exposes, fromZigbee, configure, isModernExtend: true};
+}
+
+export function addCustomClusterManuSpecificIkeaAirPurifier(): ModernExtend {
+    return deviceAddCustomCluster(
+        'manuSpecificIkeaAirPurifier',
+        {
+            ID: 0xfc7d,
+            manufacturerCode: Zcl.ManufacturerCode.IKEA_OF_SWEDEN,
+            attributes: {
+                filterRunTime: {ID: 0x0000, type: Zcl.DataType.UINT32},
+                replaceFilter: {ID: 0x0001, type: Zcl.DataType.UINT8},
+                filterLifeTime: {ID: 0x0002, type: Zcl.DataType.UINT32},
+                controlPanelLight: {ID: 0x0003, type: Zcl.DataType.BOOLEAN},
+                particulateMatter25Measurement: {ID: 0x0004, type: Zcl.DataType.UINT16},
+                childLock: {ID: 0x0005, type: Zcl.DataType.BOOLEAN},
+                fanMode: {ID: 0x0006, type: Zcl.DataType.UINT8},
+                fanSpeed: {ID: 0x0007, type: Zcl.DataType.UINT8},
+                deviceRunTime: {ID: 0x0008, type: Zcl.DataType.UINT32},
+            },
+            commands: {},
+            commandsResponse: {},
+        },
+    );
+}
+
+export function addCustomClusterManuSpecificIkeaVocIndexMeasurement(): ModernExtend {
+    return deviceAddCustomCluster(
+        'manuSpecificIkeaVocIndexMeasurement',
+        {
+            ID: 0xfc7e,
+            manufacturerCode: Zcl.ManufacturerCode.IKEA_OF_SWEDEN,
+            attributes: {
+                measuredValue: {ID: 0x0000, type: Zcl.DataType.SINGLE_PREC},
+                measuredMinValue: {ID: 0x0001, type: Zcl.DataType.SINGLE_PREC},
+                measuredMaxValue: {ID: 0x0002, type: Zcl.DataType.SINGLE_PREC},
+            },
+            commands: {},
+            commandsResponse: {},
+        },
+    );
+}
+
+// Seems to be present on newer IKEA devices like: VINDSTYRKA, RODRET, and BADRING
+//  Also observed on some older devices that had a post DIRIGERA release fw update.
+//  No attributes known.
+export function addCustomClusterManuSpecificIkeaUnknown(): ModernExtend {
+    return deviceAddCustomCluster(
+        'manuSpecificIkeaUnknown',
+        {
+            ID: 0xfc7c,
+            manufacturerCode: Zcl.ManufacturerCode.IKEA_OF_SWEDEN,
+            attributes: {},
+            commands: {},
+            commandsResponse: {},
+        },
+    );
 }
 
 export const legacy = {
@@ -639,11 +730,8 @@ export const legacy = {
             type: 'commandToggle',
             options: [options.legacy()],
             convert: (model, msg, publish, options, meta) => {
-                if (hasAlreadyProcessedMessage(msg, model)) return;
                 if (isLegacyEnabled(options)) {
                     return {action: 'play_pause'};
-                } else {
-                    return fz.command_toggle.convert(model, msg, publish, options, meta);
                 }
             },
         } satisfies Fz.Converter,
@@ -652,7 +740,6 @@ export const legacy = {
             type: 'commandStep',
             options: [options.legacy()],
             convert: (model, msg, publish, options, meta) => {
-                if (hasAlreadyProcessedMessage(msg, model)) return;
                 if (isLegacyEnabled(options)) {
                     const direction = msg.data.stepmode === 1 ? 'backward' : 'forward';
                     return {
@@ -660,8 +747,6 @@ export const legacy = {
                         step_size: msg.data.stepsize,
                         transition_time: msg.data.transtime,
                     };
-                } else {
-                    return fz.command_step.convert(model, msg, publish, options, meta);
                 }
             },
         } satisfies Fz.Converter,

@@ -5,10 +5,8 @@ import type {
     Endpoint as ZHEndpoint,
     Group as ZHGroup,
 } from 'zigbee-herdsman/dist/controller/model';
-import type {
-    FrameControl,
-    ZclHeader as ZHZclHeader,
-} from 'zigbee-herdsman/dist/zcl';
+import type {FrameControl} from 'zigbee-herdsman/dist/zspec/zcl/definition/tstype';
+import type {Header as ZHZclHeader} from 'zigbee-herdsman/dist/zspec/zcl';
 
 import * as exposes from './exposes';
 
@@ -37,6 +35,7 @@ export interface Fingerprint {
     hardwareVersion?: number, manufacturerName?: string, modelID?: string, powerSource?: 'Battery' | 'Mains (single phase)',
     softwareBuildID?: string, stackVersion?: number, zclVersion?: number, ieeeAddr?: RegExp,
     endpoints?: {ID?: number, profileID?: number, deviceID?: number, inputClusters?: number[], outputClusters?: number[]}[],
+    priority?: number,
 }
 export type WhiteLabel =
     {vendor: string, model: string, description: string, fingerprint: Fingerprint[]} |
@@ -133,9 +132,9 @@ export interface DefinitionMeta {
      */
     turnsOffAtBrightness1?: boolean;
     tuyaThermostatPreset?: {[s: number]: string},
-    /** TuYa specific thermostat options */
+    /** Tuya specific thermostat options */
     tuyaThermostatSystemMode?: {[s: number]: string},
-    /** TuYa specific thermostat options */
+    /** Tuya specific thermostat options */
     tuyaThermostatPresetToSystemMode?: {[s: number]: string},
     /**
      * see `toZigbee.light_color`
@@ -155,16 +154,22 @@ export interface DefinitionMeta {
      * @defaultValue true
      */
     supportsHueAndSaturation?: boolean,
+    /**
+     * Do not set `position` or `tilt` to target value on /set. See `toZigbee.cover_position_tilt`
+     *
+     * @defaultValue false
+     */
+    coverPositionTiltDisableReport?: boolean,
 }
 
-export type Configure = (device: Zh.Device, coordinatorEndpoint: Zh.Endpoint) => Promise<void>;
+export type Configure = (device: Zh.Device, coordinatorEndpoint: Zh.Endpoint, definition: Definition) => Promise<void>;
 export type OnEvent = (type: OnEventType, data: OnEventData, device: Zh.Device, settings: KeyValue, state: KeyValue) => Promise<void>;
 
 export interface ModernExtend {
     fromZigbee?: Fz.Converter[],
     toZigbee?: Tz.Converter[],
     exposes?: Expose[],
-    configure?: Configure,
+    configure?: Configure[],
     meta?: DefinitionMeta,
     ota?: DefinitionOta,
     onEvent?: OnEvent,
@@ -185,24 +190,32 @@ export type DefinitionOta = {
     updateToLatest: (device: Zh.Device, onProgress: Ota.OnProgress) => Promise<number>;
 }
 
+export type DefinitionExposesFunction = (device: Zh.Device | undefined, options: KeyValue | undefined) => Expose[];
+
+export type DefinitionExposes = Expose[] | DefinitionExposesFunction;
+
 export type Definition = {
     model: string;
     vendor: string;
     description: string;
     whiteLabel?: WhiteLabel[];
-    endpoint?: (device: Zh.Device) => {[s: string]: number},
-    configure?: Configure,
-    options?: Option[],
-    meta?: DefinitionMeta,
-    onEvent?: OnEvent,
-    ota?: DefinitionOta,
-    generated?: boolean,
-} & ({ zigbeeModel: string[] } | { fingerprint: Fingerprint[] })
-    & ({ extend: ModernExtend[], fromZigbee?: Fz.Converter[], toZigbee?: Tz.Converter[],
-        exposes?: (Expose[] | ((device: Zh.Device | undefined, options: KeyValue | undefined) => Expose[])) } |
-    {
-        fromZigbee: Fz.Converter[], toZigbee: Tz.Converter[],
-        exposes: (Expose[] | ((device: Zh.Device | undefined, options: KeyValue | undefined) => Expose[]))
+    endpoint?: (device: Zh.Device) => {[s: string]: number};
+    configure?: Configure;
+    options?: Option[];
+    meta?: DefinitionMeta;
+    onEvent?: OnEvent;
+    ota?: DefinitionOta;
+    generated?: boolean;
+} & ({ zigbeeModel: string[]; fingerprint?: Fingerprint[]; } | { zigbeeModel?: string[]; fingerprint: Fingerprint[]; })
+    & ({
+        extend: ModernExtend[];
+        fromZigbee?: Fz.Converter[];
+        toZigbee?: Tz.Converter[];
+        exposes?: DefinitionExposes;
+    } | {
+        fromZigbee: Fz.Converter[];
+        toZigbee: Tz.Converter[];
+        exposes: DefinitionExposes;
     });
 
 export namespace Fz {
@@ -254,11 +267,11 @@ export namespace Tuya {
     export interface DpValue {dp: number, datatype: number, data: Buffer | number[]}
     export interface ValueConverterSingle {
         to?: (value: unknown, meta?: Tz.Meta) => unknown,
-        from?: (value: unknown, meta?: Fz.Meta, options?: KeyValue, publish?: Publish) => number|string|boolean|KeyValue|null,
+        from?: (value: unknown, meta?: Fz.Meta, options?: KeyValue, publish?: Publish, msg?: Fz.Message) => number|string|boolean|KeyValue|null,
     }
     export interface ValueConverterMulti {
         to?: (value: unknown, meta?: Tz.Meta) => unknown,
-        from?: (value: unknown, meta?: Fz.Meta, options?: KeyValue, publish?: Publish) => KeyValue,
+        from?: (value: unknown, meta?: Fz.Meta, options?: KeyValue, publish?: Publish, msg?: Fz.Message) => KeyValue,
     }
     export interface MetaTuyaDataPointsMeta {skip?: (meta: Tz.Meta) => boolean, optimistic?: boolean}
     export type MetaTuyaDataPointsSingle = [number, string, Tuya.ValueConverterSingle, MetaTuyaDataPointsMeta?];

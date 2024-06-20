@@ -5,6 +5,8 @@ import * as legacy from '../lib/legacy';
 import tz from '../converters/toZigbee';
 import * as constants from '../lib/constants';
 import * as reporting from '../lib/reporting';
+import {battery, iasZoneAlarm} from '../lib/modernExtend';
+import * as tuya from '../lib/tuya';
 const e = exposes.presets;
 const ea = exposes.access;
 
@@ -267,6 +269,22 @@ const definitions: Definition[] = [
         },
     },
     {
+        fingerprint: tuya.fingerprint('TS0201', ['_TZE200_01fvxamo']),
+        model: 'THS317-ET-EY',
+        vendor: 'OWON',
+        description: 'Temperature sensor with probe',
+        fromZigbee: [tuya.fz.datapoints],
+        toZigbee: [tuya.tz.datapoints],
+        configure: tuya.configureMagicPacket,
+        exposes: [e.temperature(), e.battery()],
+        meta: {
+            tuyaDatapoints: [
+                [1, 'temperature', tuya.valueConverter.divideBy10],
+                [4, 'battery', tuya.valueConverter.raw],
+            ],
+        },
+    },
+    {
         zigbeeModel: ['THS317-ET'],
         model: 'THS317-ET',
         vendor: 'OWON',
@@ -408,6 +426,20 @@ const definitions: Definition[] = [
             device.powerSource = 'Battery';
             device.save();
         },
+    },
+    {
+        zigbeeModel: ['PIR313-P'],
+        model: 'PIR313-P',
+        vendor: 'OWON',
+        description: 'Motion sensor',
+        extend: [battery(), iasZoneAlarm({zoneType: 'occupancy', zoneAttributes: ['alarm_1', 'battery_low', 'tamper']})],
+    },
+    {
+        zigbeeModel: ['DWS312'],
+        model: 'DWS312',
+        vendor: 'OWON',
+        description: 'Door/window sensor',
+        extend: [battery(), iasZoneAlarm({zoneType: 'contact', zoneAttributes: ['alarm_1', 'battery_low', 'tamper']})],
     },
 ];
 

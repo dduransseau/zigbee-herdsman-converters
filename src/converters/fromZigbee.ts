@@ -2,7 +2,7 @@ import {
     precisionRound, mapNumberRange, isLegacyEnabled, toLocalISOString, numberWithinRange, hasAlreadyProcessedMessage,
     addActionGroup, postfixWithEndpointName, getKey, batteryVoltageToPercentage,
 } from '../lib/utils';
-import {Fz, KeyValueAny, KeyValueNumberString} from '../lib/types';
+import {Fz, KeyValue, KeyValueAny, KeyValueNumberString} from '../lib/types';
 import * as globalStore from '../lib/store';
 import * as constants from '../lib/constants';
 import * as libColor from '../lib/color';
@@ -719,7 +719,8 @@ const converters1 = {
                 if (factor != null) {
                     power = (power * factor) * 1000; // kWh to Watt
                 }
-                payload.power = power;
+                const property = postfixWithEndpointName('power', msg, model, meta);
+                payload[property] = power;
             }
 
             if (factor != null && (msg.data.hasOwnProperty('currentSummDelivered') ||
@@ -727,12 +728,14 @@ const converters1 = {
                 if (msg.data.hasOwnProperty('currentSummDelivered')) {
                     const data = msg.data['currentSummDelivered'];
                     const value = (parseInt(data[0]) << 32) + parseInt(data[1]);
-                    payload.energy = value * factor;
+                    const property = postfixWithEndpointName('energy', msg, model, meta);
+                    payload[property] = value * factor;
                 }
                 if (msg.data.hasOwnProperty('currentSummReceived')) {
                     const data = msg.data['currentSummReceived'];
                     const value = (parseInt(data[0]) << 32) + parseInt(data[1]);
-                    payload.produced_energy = value * factor;
+                    const property = postfixWithEndpointName('produced_energy', msg, model, meta);
+                    payload[property] = value * factor;
                 }
             }
 
@@ -772,6 +775,9 @@ const converters1 = {
                 {key: 'rmsVoltagePhB', name: 'voltage_phase_b', factor: 'acVoltage'},
                 {key: 'rmsVoltagePhC', name: 'voltage_phase_c', factor: 'acVoltage'},
                 {key: 'acFrequency', name: 'ac_frequency', factor: 'acFrequency'},
+                {key: 'dcPower', name: 'power', factor: 'dcPower'},
+                {key: 'dcCurrent', name: 'current', factor: 'dcCurrent'},
+                {key: 'dcVoltage', name: 'voltage', factor: 'dcVoltage'},
             ];
 
             const payload: KeyValueAny = {};
@@ -784,13 +790,16 @@ const converters1 = {
                 }
             }
             if (msg.data.hasOwnProperty('powerFactor')) {
-                payload.power_factor = precisionRound(msg.data['powerFactor'] / 100, 2);
+                const property = postfixWithEndpointName('power_factor', msg, model, meta);
+                payload[property] = precisionRound(msg.data['powerFactor'] / 100, 2);
             }
             if (msg.data.hasOwnProperty('powerFactorPhB')) {
-                payload.power_factor_phase_b = precisionRound(msg.data['powerFactorPhB'] / 100, 2);
+                const property = postfixWithEndpointName('power_factor_phase_b', msg, model, meta);
+                payload[property] = precisionRound(msg.data['powerFactorPhB'] / 100, 2);
             }
             if (msg.data.hasOwnProperty('powerFactorPhC')) {
-                payload.power_factor_phase_c = precisionRound(msg.data['powerFactorPhC'] / 100, 2);
+                const property = postfixWithEndpointName('power_factor_phase_c', msg, model, meta);
+                payload[property] = precisionRound(msg.data['powerFactorPhC'] / 100, 2);
             }
             return payload;
         },
@@ -1415,6 +1424,22 @@ const converters1 = {
             return payload;
         },
     } satisfies Fz.Converter,
+    command_move_to_hue_and_saturation: {
+        cluster: 'lightingColorCtrl',
+        type: 'commandMoveToHueAndSaturation',
+        convert: (model, msg, publish, options, meta) => {
+            if (hasAlreadyProcessedMessage(msg, model)) return;
+            const payload = {
+                action: postfixWithEndpointName(`move_to_hue_and_saturation`, msg, model, meta),
+                action_hue: msg.data.hue,
+                action_saturation: msg.data.saturation,
+                action_transition_time: msg.data.transtime,
+            };
+
+            addActionGroup(payload, msg, model);
+            return payload;
+        },
+    } satisfies Fz.Converter,
     command_step_hue: {
         cluster: 'lightingColorCtrl',
         type: ['commandStepHue'],
@@ -1611,6 +1636,14 @@ const converters1 = {
                         metaInvert ? (value === 100 ? 'OPEN' : 'CLOSE') : (value === 0 ? 'OPEN' : 'CLOSE');
                 }
             }
+            if (msg.data.hasOwnProperty('windowCoveringMode')) {
+                result[postfixWithEndpointName('cover_mode', msg, model, meta)] = {
+                    reversed: (msg.data.windowCoveringMode & 1<<0) > 0,
+                    calibration: (msg.data.windowCoveringMode & 1<<1) > 0,
+                    maintenance: (msg.data.windowCoveringMode & 1<<2) > 0,
+                    led: (msg.data.windowCoveringMode & 1<<3) > 0,
+                };
+            }
             return result;
         },
     } satisfies Fz.Converter,
@@ -1700,7 +1733,7 @@ const converters1 = {
     } satisfies Fz.Converter,
     checkin_presence: {
         cluster: 'genPollCtrl',
-        type: ['commandCheckIn'],
+        type: ['commandCheckin'],
         options: [exposes.options.presence_timeout()],
         convert: (model, msg, publish, options, meta) => {
             const useOptionsTimeout = options && options.hasOwnProperty('presence_timeout');
@@ -2177,19 +2210,6 @@ const converters1 = {
             return {action: `${clickMapping[msg.data[6]]}`};
         },
     } satisfies Fz.Converter,
-    tuya_on_off_action: {
-        cluster: 'genOnOff',
-        type: 'commandTuyaAction',
-        convert: (model, msg, publish, options, meta) => {
-            if (hasAlreadyProcessedMessage(msg, model)) return;
-            const clickMapping: KeyValueNumberString = {0: 'single', 1: 'double', 2: 'hold'};
-            const buttonMapping: KeyValueNumberString = {1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8'};
-            // TS004F has single endpoint, TS0041A/TS0041 can have multiple but have just one button
-            const button = msg.device.endpoints.length == 1 || ['TS0041A', 'TS0041'].includes(msg.device.modelID) ?
-                '' : `${buttonMapping[msg.endpoint.ID]}_`;
-            return {action: `${button}${clickMapping[msg.data.value]}`};
-        },
-    } satisfies Fz.Converter,
     tuya_switch_scene: {
         cluster: 'genOnOff',
         type: 'commandTuyaAction',
@@ -2360,6 +2380,23 @@ const converters1 = {
             }
         },
     } satisfies Fz.Converter,
+    livolo_hygrometer_state: {
+        cluster: 'genPowerCfg',
+        type: ['raw'],
+        convert: (model, msg, publish, options, meta) => {
+            const dp = msg.data[10];
+            switch (dp) {
+            case 14:
+                return {
+                    temperature: Number(msg.data[13]),
+                };
+            case 12:
+                return {
+                    humidity: Number(msg.data[13]),
+                };
+            }
+        },
+    } satisfies Fz.Converter,
     livolo_pir_state: {
         cluster: 'genPowerCfg',
         type: ['raw'],
@@ -2438,6 +2475,10 @@ const converters1 = {
             [124,210,21,216,128,  225,52,225,34,0,75,18,0,  19,13,0]       after interview
             [122,209,             245,94,225,34,0,75,18,0,  7,1,7,1,1,11]  occupancy: true
             [122,209,             245,94,225,34,0,75,18,0,  7,1,7,1,0,11]  occupancy: false
+
+            hygrometer
+            [122,209,             191,22,3,24,0,75,18,0, 14,1,8,21,14,11]  temperature: 21 degrees Celcius
+            [122,209,             191,22,3,24,0,75,18,0, 12,1,9,73,12,11]  humidity: 73%
             */
             const malformedHeader = Buffer.from([0x7c, 0xd2, 0x15, 0xd8, 0x00]);
             const infoHeader = Buffer.from([0x7c, 0xd2, 0x15, 0xd8, 0x80]);
@@ -2485,6 +2526,11 @@ const converters1 = {
                 if (msg.data.includes(Buffer.from([19, 13, 0]), 13)) {
                     logger.debug('Detected Livolo Pir Sensor', NS);
                     meta.device.modelID = 'TI0001-pir';
+                    meta.device.save();
+                }
+                if (msg.data.includes(Buffer.from([19, 15, 0]), 13)) {
+                    logger.debug('Detected Livolo Digital Hygrometer', NS);
+                    meta.device.modelID = 'TI0001-hygrometer';
                     meta.device.save();
                 }
             }
@@ -4925,21 +4971,22 @@ const converters2 = {
         convert: async (model, msg, publish, options, meta) => {
             const result = await converters1.thermostat.convert(model, msg, publish, options, meta);
             if (result) {
-                // system_mode is always 'heat', we set it below based on eurotronic_host_flags
-                delete result['system_mode'];
-
                 if (typeof msg.data[0x4003] == 'number') {
                     result.current_heating_setpoint = precisionRound(msg.data[0x4003], 2) / 100;
                 }
                 if (typeof msg.data[0x4008] == 'number') {
-                    result.child_protection = (msg.data[0x4008] & (1 << 7)) != 0;
-                    result.mirror_display = (msg.data[0x4008] & (1 << 1)) != 0;
-                    result.boost = (msg.data[0x4008] & 1 << 2) != 0;
-                    result.window_open = (msg.data[0x4008] & (1 << 4)) != 0;
-
-                    if (result.boost) result.system_mode = constants.thermostatSystemModes[4];
-                    else if (result.window_open) result.system_mode = constants.thermostatSystemModes[0];
-                    else result.system_mode = constants.thermostatSystemModes[1];
+                    result.child_lock = (msg.data[0x4008] & 0x80) != 0 ? 'LOCK' : 'UNLOCK';
+                    result.mirror_display = (msg.data[0x4008] & 0x02) != 0 ? 'ON' : 'OFF';
+                    // This seems broken... We need to write 0x20 to turn it off and 0x10 to set
+                    // it to auto mode. However, when it reports the flag, it will report 0x10
+                    //  when it's off, and nothing at all when it's in auto mode
+                    if ((msg.data[0x4008] & 0x10) != 0) { // reports auto -> setting to force_off
+                        result.system_mode = constants.thermostatSystemModes[0];
+                    } else if ((msg.data[0x4008] & 0x04) != 0) { // always_on
+                        result.system_mode = constants.thermostatSystemModes[4];
+                    } else { // auto
+                        result.system_mode = constants.thermostatSystemModes[1];
+                    }
                 }
                 if (typeof msg.data[0x4002] == 'number') {
                     result.error_status = msg.data[0x4002];
@@ -5125,6 +5172,49 @@ const converters2 = {
                 payload.pilot_wire_mode = 'unknown';
             }
             return payload;
+        },
+    } satisfies Fz.Converter,
+    TS110E: {
+        cluster: 'genLevelCtrl',
+        type: ['attributeReport', 'readResponse'],
+        convert: (model, msg, publish, options, meta) => {
+            const result: KeyValue = {};
+            if (msg.data.hasOwnProperty('64515')) {
+                result['min_brightness'] = utils.mapNumberRange(msg.data['64515'], 0, 1000, 1, 255);
+            }
+            if (msg.data.hasOwnProperty('64516')) {
+                result['max_brightness'] = utils.mapNumberRange(msg.data['64516'], 0, 1000, 1, 255);
+            }
+            if (msg.data.hasOwnProperty('61440')) {
+                const propertyName = utils.postfixWithEndpointName('brightness', msg, model, meta);
+                result[propertyName] = utils.mapNumberRange(msg.data['61440'], 0, 1000, 0, 255);
+            }
+            return result;
+        },
+    } satisfies Fz.Converter,
+    TS110E_light_type: {
+        cluster: 'genLevelCtrl',
+        type: ['attributeReport', 'readResponse'],
+        convert: (model, msg, publish, options, meta) => {
+            const result: KeyValue = {};
+            if (msg.data.hasOwnProperty('64514')) {
+                const lookup: KeyValue = {0: 'led', 1: 'incandescent', 2: 'halogen'};
+                result['light_type'] = lookup[msg.data['64514']];
+            }
+            return result;
+        },
+    } satisfies Fz.Converter,
+    TS110E_switch_type: {
+        cluster: 'genLevelCtrl',
+        type: ['attributeReport', 'readResponse'],
+        convert: (model, msg, publish, options, meta) => {
+            const result: KeyValue = {};
+            if (msg.data.hasOwnProperty('64514')) {
+                const lookup: KeyValue = {0: 'momentary', 1: 'toggle', 2: 'state'};
+                const propertyName = utils.postfixWithEndpointName('switch_type', msg, model, meta);
+                result[propertyName] = lookup[msg.data['64514']];
+            }
+            return result;
         },
     } satisfies Fz.Converter,
 };

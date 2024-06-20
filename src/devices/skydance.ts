@@ -26,6 +26,7 @@ const definitions: Definition[] = [
             {modelID: 'TS0601', manufacturerName: '_TZE200_gz3n0tzf'},
             {modelID: 'TS0601', manufacturerName: '_TZE200_nthosjmx'},
             {modelID: 'TS0601', manufacturerName: '_TZE200_na98lvjp'},
+            {modelID: 'TS0601', manufacturerName: '_TZE200_2gtsuokt'},
         ],
         model: 'WZ5_cct',
         vendor: 'Skydance',
@@ -38,6 +39,7 @@ const definitions: Definition[] = [
         ],
         whiteLabel: [
             tuya.whitelabel('Ltech', 'TY-75-24-G2Z2_CCT', '150W 24V Zigbee CV tunable white LED driver', ['_TZE200_na98lvjp']),
+            tuya.whitelabel('Ltech', 'SE-20-250-1000-W2Z2', 'LED (CCT mode)', ['_TZE200_2gtsuokt']),
         ],
     },
     {
@@ -58,7 +60,7 @@ const definitions: Definition[] = [
     {
         fingerprint: [{modelID: 'TS0503B', manufacturerName: '_TZB210_zdvrsts8'}],
         model: 'WZ5_rgb_1',
-        vendor: 'TuYa',
+        vendor: 'Tuya',
         description: 'Zigbee & RF 5 in 1 LED controller (RGB mode)',
         extend: [tuya.modernExtend.tuyaLight({color: {modes: ['hs', 'xy']}})],
     },

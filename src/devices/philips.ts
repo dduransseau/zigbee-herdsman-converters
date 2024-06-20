@@ -7,7 +7,7 @@ import tz from '../converters/toZigbee';
 import * as ota from '../lib/ota';
 import * as reporting from '../lib/reporting';
 import {philipsOnOff, philipsLight, philipsFz, philipsTz} from '../lib/philips';
-import {quirkCheckinInterval} from '../lib/modernExtend';
+import {deviceEndpoints, quirkCheckinInterval, identify} from '../lib/modernExtend';
 
 const e = exposes.presets;
 const ea = exposes.access;
@@ -558,7 +558,7 @@ const definitions: Definition[] = [
         model: '7602031K6',
         vendor: 'Philips',
         description: 'Hue Go portable light',
-        extend: [philipsLight({colorTemp: {range: [153, 500]}})],
+        extend: [philipsLight({colorTemp: {range: [153, 500]}, color: true})],
     },
     {
         zigbeeModel: ['LLC020'],
@@ -1114,6 +1114,23 @@ const definitions: Definition[] = [
         extend: [philipsLight({colorTemp: {range: undefined}, color: true})],
     },
     {
+        zigbeeModel: ['LWF004'],
+        model: '8719514329843',
+        vendor: 'Philips',
+        description: 'Hue A60 - E27 smart bulb - 800 lumen',
+        extend: [philipsLight()],
+    },
+    {
+        zigbeeModel: ['LCW004'],
+        model: '046677585235',
+        vendor: 'Philips',
+        description: 'Hue Dymera indoor and outdoor wall light',
+        extend: [
+            deviceEndpoints({endpoints: {'top': 11, 'bottom': 12}}),
+            philipsLight({colorTemp: {range: [153, 500]}, color: true, endpointNames: ['top', 'bottom']}),
+        ],
+    },
+    {
         zigbeeModel: ['LCA001', 'LCA002', 'LCA003'],
         model: '9290022166',
         vendor: 'Philips',
@@ -1215,7 +1232,7 @@ const definitions: Definition[] = [
         extend: [philipsLight({colorTemp: {range: undefined}, color: true})],
     },
     {
-        zigbeeModel: ['LCT024', '440400982841', '440400982842', 'PCM002'],
+        zigbeeModel: ['LCT024', '440400982841', '440400982842', '440400982843', 'PCM002'],
         model: '915005733701',
         vendor: 'Philips',
         description: 'Hue White and color ambiance Play Lightbar',
@@ -2157,7 +2174,7 @@ const definitions: Definition[] = [
         model: '929003017102',
         vendor: 'Philips',
         description: 'Hue wall switch module',
-        fromZigbee: [fz.battery, fz.hue_wall_switch_device_mode, fz.hue_wall_switch, fz.command_toggle],
+        fromZigbee: [fz.battery, fz.hue_wall_switch_device_mode, fz.hue_wall_switch, fz.command_toggle, fz.command_move, fz.command_stop],
         exposes: [
             e.battery(), e.action(['left_press', 'left_press_release', 'right_press', 'right_press_release',
                 'left_hold', 'left_hold_release', 'right_hold', 'right_hold_release', 'toggle']),
@@ -2811,6 +2828,13 @@ const definitions: Definition[] = [
         extend: [philipsLight({colorTemp: {range: [153, 454]}})],
     },
     {
+        zigbeeModel: ['929003597901'],
+        model: '929003597901',
+        vendor: 'Philips',
+        description: 'Hue white ambiance Aurelle round panel light',
+        extend: [identify(), philipsLight({colorTemp: {range: [153, 454]}})],
+    },
+    {
         zigbeeModel: ['3418331P6'],
         model: '3418331P6',
         vendor: 'Philips',
@@ -3051,7 +3075,7 @@ const definitions: Definition[] = [
         extend: [philipsLight({colorTemp: {range: [153, 454]}})],
     },
     {
-        zigbeeModel: ['LTF002'],
+        zigbeeModel: ['LTF002', 'LTC010'],
         model: '6109331C5',
         vendor: 'Philips',
         description: 'Hue white ambiance Apogee round',
@@ -3334,14 +3358,14 @@ const definitions: Definition[] = [
         zigbeeModel: ['LCX012'],
         model: '929003535301',
         vendor: 'Philips',
-        description: 'Hue Festavia gradient light string 250',
+        description: 'Hue Festavia gradient light string 250 (1st-gen)',
         extend: [philipsLight({colorTemp: {range: [153, 500]}, color: true, gradient: {extraEffects: ['sparkle', 'opal', 'glisten']}})],
     },
     {
-        zigbeeModel: ['LCX017'],
-        model: '929003674601',
+        zigbeeModel: ['LCX015'],
+        model: '9290036744',
         vendor: 'Philips',
-        description: 'Hue Festavia gradient light string 500',
+        description: 'Hue Festavia gradient light string 250',
         extend: [philipsLight({colorTemp: {range: [153, 500]}, color: true, gradient: {extraEffects: ['sparkle', 'opal', 'glisten']}})],
     },
     {
@@ -3349,6 +3373,13 @@ const definitions: Definition[] = [
         model: '9290036745',
         vendor: 'Philips',
         description: 'Hue Festavia gradient light string 100',
+        extend: [philipsLight({colorTemp: {range: [153, 500]}, color: true, gradient: {extraEffects: ['sparkle', 'opal', 'glisten']}})],
+    },
+    {
+        zigbeeModel: ['LCX017'],
+        model: '929003674601',
+        vendor: 'Philips',
+        description: 'Hue Festavia gradient light string 500',
         extend: [philipsLight({colorTemp: {range: [153, 500]}, color: true, gradient: {extraEffects: ['sparkle', 'opal', 'glisten']}})],
     },
     {
@@ -3548,13 +3579,6 @@ const definitions: Definition[] = [
         extend: [philipsLight({colorTemp: {range: [153, 454]}})],
     },
     {
-        zigbeeModel: ['LCX015'],
-        model: '9290036744',
-        vendor: 'Philips',
-        description: 'Hue Festavia gradient light string 250',
-        extend: [philipsLight({colorTemp: {range: [153, 500]}, color: true, gradient: {extraEffects: ['sparkle']}})],
-    },
-    {
         zigbeeModel: ['915005914501'],
         model: '915005914501',
         vendor: 'Philips',
@@ -3573,6 +3597,13 @@ const definitions: Definition[] = [
         model: '442296118491',
         vendor: 'Philips',
         description: 'Hue Secure Camera Floodlight',
+        extend: [philipsLight({colorTemp: {range: [153, 500]}, color: true})],
+    },
+    {
+        zigbeeModel: ['929003555701'],
+        model: '929003555701',
+        vendor: 'Philips',
+        description: 'Hue White and Color Ambiance Play Gradient Light Tube Compact',
         extend: [philipsLight({colorTemp: {range: [153, 500]}, color: true})],
     },
 ];

@@ -1,9 +1,9 @@
-import dataType from 'zigbee-herdsman/dist/zcl/definition/dataType';
+import {Zcl} from 'zigbee-herdsman';
 import * as exposes from '../lib/exposes';
 import fz from '../converters/fromZigbee';
 import * as legacy from '../lib/legacy';
 import tz from '../converters/toZigbee';
-import {Definition, Tz, Fz, KeyValue, Zh, Expose} from '../lib/types';
+import {Definition, Tz, Fz, KeyValue, KeyValueAny, Zh, Expose} from '../lib/types';
 import * as reporting from '../lib/reporting';
 import * as ota from '../lib/ota';
 const e = exposes.presets;
@@ -20,6 +20,7 @@ import {
     numeric,
     quirkAddEndpointCluster,
     deviceEndpoints,
+    commandsOnOff,
 } from '../lib/modernExtend';
 
 const switchTypesList = {
@@ -177,7 +178,7 @@ function ptvoAddStandardExposes(endpoint: Zh.Endpoint, expose: Expose[], options
     const epId = endpoint.ID;
     const epName = `l${epId}`;
     if (endpoint.supportsInputCluster('lightingColorCtrl')) {
-        expose.push(e.light_brightness_colorxy().withEndpoint('l1').withEndpoint(epName));
+        expose.push(e.light_brightness_colorxy().withEndpoint(epName));
         options['exposed_onoff'] = true;
         options['exposed_analog'] = true;
         options['exposed_colorcontrol'] = true;
@@ -187,7 +188,7 @@ function ptvoAddStandardExposes(endpoint: Zh.Endpoint, expose: Expose[], options
         options['exposed_analog'] = true;
         options['exposed_levelcontrol'] = true;
     }
-    if (endpoint.supportsInputCluster('genOnOff') || endpoint.supportsOutputCluster('genOnOff')) {
+    if (endpoint.supportsInputCluster('genOnOff')) {
         if (!options['exposed_onoff']) {
             expose.push(e.switch().withEndpoint(epName));
         }
@@ -201,19 +202,34 @@ function ptvoAddStandardExposes(endpoint: Zh.Endpoint, expose: Expose[], options
     }
     if (endpoint.supportsInputCluster('msTemperatureMeasurement')) {
         expose.push(e.temperature().withEndpoint(epName));
-        options['exposed_temperature'] = true;
     }
     if (endpoint.supportsInputCluster('msRelativeHumidity')) {
         expose.push(e.humidity().withEndpoint(epName));
-        options['exposed_humidity'] = true;
     }
     if (endpoint.supportsInputCluster('msPressureMeasurement')) {
         expose.push(e.pressure().withEndpoint(epName));
-        options['exposed_pressure'] = true;
     }
     if (endpoint.supportsInputCluster('msIlluminanceMeasurement')) {
         expose.push(e.illuminance().withEndpoint(epName));
-        options['exposed_illuminance'] = true;
+    }
+    if (endpoint.supportsInputCluster('msCO2')) {
+        expose.push(e.co2());
+    }
+    if (endpoint.supportsInputCluster('pm25Measurement')) {
+        expose.push(e.pm25());
+    }
+    if (endpoint.supportsInputCluster('haElectricalMeasurement')) {
+        // haElectricalMeasurement may expose only one value defined explicitly
+        if (!(options['exposed_voltage'] || options['exposed_current'] || options['exposed_power'])) {
+            expose.push(e.voltage().withEndpoint(epName));
+            expose.push(e.current().withEndpoint(epName));
+            expose.push(e.power().withEndpoint(epName));
+        }
+    }
+    if (endpoint.supportsInputCluster('seMetering')) {
+        if (!options['exposed_energy']) {
+            expose.push(e.energy().withEndpoint(epName));
+        }
     }
     if (endpoint.supportsInputCluster('genPowerCfg')) {
         deviceOptions['expose_battery'] = true;
@@ -236,6 +252,24 @@ const definitions: Definition[] = [
                             ' (any higher value is converted to 5dBm)')],
         configure: async (device, coordinatorEndpoint) => {
             const endpoint = device.getEndpoint(8);
+            const payload = [{attribute: 'zclVersion', minimumReportInterval: 0, maximumReportInterval: 3600, reportableChange: 0}];
+            await reporting.bind(endpoint, coordinatorEndpoint, ['genBasic']);
+            await endpoint.configureReporting('genBasic', payload);
+        },
+    },
+    {
+        zigbeeModel: ['SLZB-06p7', 'SLZB-07'],
+        model: 'SLZB-06p7',
+        vendor: 'SMLIGHT',
+        description: 'Router',
+        fromZigbee: [fz.linkquality_from_basic],
+        toZigbee: [],
+        exposes: [],
+        whiteLabel: [
+            {vendor: 'SMLIGHT', model: 'SLZB-07', description: 'Router', fingerprint: [{modelID: 'SLZB-07'}]},
+        ],
+        configure: async (device, coordinatorEndpoint) => {
+            const endpoint = device.getEndpoint(1);
             const payload = [{attribute: 'zclVersion', minimumReportInterval: 0, maximumReportInterval: 3600, reportableChange: 0}];
             await reporting.bind(endpoint, coordinatorEndpoint, ['genBasic']);
             await endpoint.configureReporting('genBasic', payload);
@@ -275,7 +309,7 @@ const definitions: Definition[] = [
         description: 'Multi-functional device',
         fromZigbee: [fz.battery, fz.on_off, fz.ptvo_multistate_action, legacy.fz.ptvo_switch_buttons, fz.ptvo_switch_uart,
             fz.ptvo_switch_analog_input, fz.brightness, fz.ignore_basic_report, fz.temperature,
-            fzLocal.humidity2, fzLocal.pressure2, fzLocal.illuminance2],
+            fzLocal.humidity2, fzLocal.pressure2, fzLocal.illuminance2, fz.electrical_measurement, fz.metering, fz.co2],
         toZigbee: [tz.ptvo_switch_trigger, tz.ptvo_switch_uart, tz.ptvo_switch_analog_input, tz.ptvo_switch_light_brightness, tzLocal.ptvo_on_off],
         exposes: (device, options) => {
             const expose: Expose[] = [];
@@ -301,42 +335,49 @@ const definitions: Definition[] = [
                 const deviceConfigArray = deviceConfig.split(/[\r\n]+/);
                 const allEndpoints: { [key: number]: string } = {};
                 const allEndpointsSorted = [];
+                let epConfig;
                 for (let i = 0; i < deviceConfigArray.length; i++) {
-                    const epConfig = deviceConfigArray[i];
+                    epConfig = deviceConfigArray[i];
                     const epId = parseInt(epConfig.substr(0, 1), 16);
                     if (epId <= 0) {
                         continue;
                     }
-                    allEndpoints[epId] = epConfig;
-                    allEndpointsSorted.push(epId);
+                    if (epId < 10) {
+                        epConfig = '0' + epConfig;
+                    }
+                    allEndpoints[epId] = '1';
+                    allEndpointsSorted.push(epConfig);
                 }
 
                 for (const endpoint of device.endpoints) {
                     if (allEndpoints.hasOwnProperty(endpoint.ID)) {
                         continue;
                     }
-                    allEndpointsSorted.push(endpoint.ID);
-                    allEndpoints[endpoint.ID] = '';
+                    epConfig = endpoint.ID.toString();
+                    if (endpoint.ID < 10) {
+                        epConfig = '0' + epConfig;
+                    }
+                    allEndpointsSorted.push(epConfig);
                 }
                 allEndpointsSorted.sort();
 
-                let prevEp = -1;
                 for (let i = 0; i < allEndpointsSorted.length; i++) {
-                    const epId = allEndpointsSorted[i];
-                    const epConfig = allEndpoints[epId];
-                    if (epId <= 0) {
-                        continue;
-                    }
+                    epConfig = allEndpointsSorted[i];
+                    const epId = parseInt(epConfig.substr(0, 2), 10);
+                    epConfig = epConfig.substring(2);
                     const epName = `l${epId}`;
-                    const epValueAccessRights = epConfig.substr(1, 1);
+                    const epValueAccessRights = epConfig.substr(0, 1);
                     const epStateType = ((epValueAccessRights === 'W') || (epValueAccessRights === '*'))?
                         ea.STATE_SET: ea.STATE;
-                    const valueConfig = epConfig.substr(2);
+                    const valueConfig = epConfig.substr(1);
                     const valueConfigItems = (valueConfig)? valueConfig.split(','): [];
                     let valueId = (valueConfigItems[0])? valueConfigItems[0]: '';
                     let valueDescription = (valueConfigItems[1])? valueConfigItems[1]: '';
                     let valueUnit = (valueConfigItems[2] !== undefined)? valueConfigItems[2]: '';
-                    const exposeEpOptions: KeyValue = {};
+                    if (!exposeDeviceOptions.hasOwnProperty(epName)) {
+                        exposeDeviceOptions[epName] = {};
+                    }
+                    const exposeEpOptions: KeyValueAny = exposeDeviceOptions[epName];
                     if (valueId === '*') {
                         // GPIO output (Generic)
                         exposeEpOptions['exposed_onoff'] = true;
@@ -395,6 +436,9 @@ const definitions: Definition[] = [
                         if ((valueName === undefined) && valueNumIndex) {
                             valueName = 'val' + valueNumIndex;
                         }
+                        if (valueName) {
+                            exposeEpOptions['exposed_' + valueName] = true;
+                        }
 
                         valueName = (valueName === undefined)? epName: valueName + '_' + epName;
 
@@ -423,12 +467,14 @@ const definitions: Definition[] = [
                             .withDescription(valueDescription)
                             .withUnit(valueUnit));
                     }
-                    const endpoint = device.getEndpoint(epId);
-                    if (!endpoint) {
-                        continue;
-                    }
-                    if (prevEp !== epId) {
-                        prevEp = epId;
+
+                    const epConfigNext = allEndpointsSorted[i + 1] || '-1';
+                    const epIdNext = parseInt(epConfigNext.substr(0, 2), 10);
+                    if (epIdNext !== epId) {
+                        const endpoint = device.getEndpoint(epId);
+                        if (!endpoint) {
+                            continue;
+                        }
                         ptvoAddStandardExposes(endpoint, expose, exposeEpOptions, exposeDeviceOptions);
                     }
                 }
@@ -487,6 +533,17 @@ const definitions: Definition[] = [
                             device.save();
                         }
                     } catch (err) {/* do nothing */}
+                }
+                for (const endpoint of device.endpoints) {
+                    if (endpoint.supportsInputCluster('haElectricalMeasurement')) {
+                        endpoint.saveClusterAttributeKeyValue('haElectricalMeasurement', {dcCurrentDivisor: 1000, dcCurrentMultiplier: 1,
+                            dcPowerDivisor: 10, dcPowerMultiplier: 1, dcVoltageDivisor: 100, dcVoltageMultiplier: 1,
+                            acVoltageDivisor: 100, acVoltageMultiplier: 1, acCurrentDivisor: 1000, acCurrentMultiplier: 1,
+                            acPowerDivisor: 10, acPowerMultiplier: 1});
+                    }
+                    if (endpoint.supportsInputCluster('seMetering')) {
+                        endpoint.saveClusterAttributeKeyValue('seMetering', {divisor: 1000, multiplier: 1});
+                    }
                 }
             }
         },
@@ -660,7 +717,7 @@ const definitions: Definition[] = [
                 valueOn: ['SHOW', 1],
                 valueOff: ['HIDE', 0],
                 cluster: 'hvacUserInterfaceCfg',
-                attribute: {ID: 0x0010, type: dataType.boolean},
+                attribute: {ID: 0x0010, type: Zcl.DataType.BOOLEAN},
                 description: 'Whether to show a smiley on the device screen.',
             }),
             binary({
@@ -668,14 +725,14 @@ const definitions: Definition[] = [
                 valueOn: ['ON', 1],
                 valueOff: ['OFF', 0],
                 cluster: 'hvacUserInterfaceCfg',
-                attribute: {ID: 0x0011, type: dataType.boolean},
+                attribute: {ID: 0x0011, type: Zcl.DataType.BOOLEAN},
                 description: 'Whether to turn display on/off.',
             }),
             numeric({
                 name: 'temperature_calibration',
                 unit: '°C',
                 cluster: 'msTemperatureMeasurement',
-                attribute: {ID: 0x0010, type: dataType.int16},
+                attribute: {ID: 0x0010, type: Zcl.DataType.INT16},
                 valueMin: -100.0,
                 valueMax: 100.0,
                 valueStep: 0.01,
@@ -686,7 +743,7 @@ const definitions: Definition[] = [
                 name: 'humidity_calibration',
                 unit: '%',
                 cluster: 'msRelativeHumidity',
-                attribute: {ID: 0x0010, type: dataType.int16},
+                attribute: {ID: 0x0010, type: Zcl.DataType.INT16},
                 valueMin: -100.0,
                 valueMax: 100.0,
                 valueStep: 0.01,
@@ -697,7 +754,7 @@ const definitions: Definition[] = [
                 name: 'comfort_temperature_min',
                 unit: '°C',
                 cluster: 'hvacUserInterfaceCfg',
-                attribute: {ID: 0x0102, type: dataType.int16},
+                attribute: {ID: 0x0102, type: Zcl.DataType.INT16},
                 valueMin: -100.0,
                 valueMax: 100.0,
                 scale: 100,
@@ -707,7 +764,7 @@ const definitions: Definition[] = [
                 name: 'comfort_temperature_max',
                 unit: '°C',
                 cluster: 'hvacUserInterfaceCfg',
-                attribute: {ID: 0x0103, type: dataType.int16},
+                attribute: {ID: 0x0103, type: Zcl.DataType.INT16},
                 valueMin: -100.0,
                 valueMax: 100.0,
                 scale: 100,
@@ -717,7 +774,7 @@ const definitions: Definition[] = [
                 name: 'comfort_humidity_min',
                 unit: '%',
                 cluster: 'hvacUserInterfaceCfg',
-                attribute: {ID: 0x0104, type: dataType.uint16},
+                attribute: {ID: 0x0104, type: Zcl.DataType.UINT16},
                 valueMin: 0.0,
                 valueMax: 100.0,
                 scale: 100,
@@ -727,7 +784,7 @@ const definitions: Definition[] = [
                 name: 'comfort_humidity_max',
                 unit: '%',
                 cluster: 'hvacUserInterfaceCfg',
-                attribute: {ID: 0x0105, type: dataType.uint16},
+                attribute: {ID: 0x0105, type: Zcl.DataType.UINT16},
                 valueMin: 0.0,
                 valueMax: 100.0,
                 scale: 100,
@@ -855,6 +912,129 @@ const definitions: Definition[] = [
         ota: ota.zigbeeOTA,
     },
     {
+        zigbeeModel: ['MHO-C401N-z'],
+        model: 'MHO-C401N-z',
+        vendor: 'Xiaomi',
+        description: 'E-Ink temperature & humidity sensor with custom firmware (pvxx/ZigbeeTLc)',
+        extend: [
+            quirkAddEndpointCluster({
+                endpointID: 1,
+                outputClusters: [],
+                inputClusters: [
+                    'genPowerCfg',
+                    'msTemperatureMeasurement',
+                    'msRelativeHumidity',
+                    'hvacUserInterfaceCfg',
+                ],
+            }),
+            battery({percentage: true}),
+            temperature({reporting: {min: 10, max: 300, change: 10}, access: 'STATE'}),
+            humidity({reporting: {min: 2, max: 300, change: 50}, access: 'STATE'}),
+            enumLookup({
+                name: 'temperature_display_mode',
+                lookup: {'celsius': 0, 'fahrenheit': 1},
+                cluster: 'hvacUserInterfaceCfg',
+                attribute: {ID: 0x0000, type: Zcl.DataType.ENUM8},
+                description: 'The units of the temperature displayed on the device screen.',
+            }),
+            binary({
+                name: 'smiley',
+                valueOn: ['SHOW', 0],
+                valueOff: ['HIDE', 1],
+                cluster: 'hvacUserInterfaceCfg',
+                attribute: {ID: 0x0002, type: Zcl.DataType.ENUM8},
+                description: 'Whether to show a smiley on the device screen.',
+            }),
+            numeric({
+                name: 'temperature_calibration',
+                unit: '°C',
+                cluster: 'hvacUserInterfaceCfg',
+                attribute: {ID: 0x0100, type: Zcl.DataType.INT16},
+                valueMin: -12.7,
+                valueMax: 12.7,
+                valueStep: 0.01,
+                scale: 10,
+                description: 'The temperature calibration, in 0.01° steps.',
+            }),
+            numeric({
+                name: 'humidity_calibration',
+                unit: '%',
+                cluster: 'hvacUserInterfaceCfg',
+                attribute: {ID: 0x0101, type: Zcl.DataType.INT16},
+                valueMin: -12.7,
+                valueMax: 12.7,
+                valueStep: 0.01,
+                scale: 10,
+                description: 'The humidity offset is set in 0.01 % steps.',
+            }),
+            numeric({
+                name: 'comfort_temperature_min',
+                unit: '°C',
+                cluster: 'hvacUserInterfaceCfg',
+                attribute: {ID: 0x0102, type: Zcl.DataType.INT16},
+                valueMin: -127.0,
+                valueMax: 127.0,
+                scale: 100,
+                description: 'Comfort parameters/Temperature minimum, in 1°C steps.',
+            }),
+            numeric({
+                name: 'comfort_temperature_max',
+                unit: '°C',
+                cluster: 'hvacUserInterfaceCfg',
+                attribute: {ID: 0x0103, type: Zcl.DataType.INT16},
+                valueMin: -127.0,
+                valueMax: 127.0,
+                scale: 100,
+                description: 'Comfort parameters/Temperature maximum, in 1°C steps.',
+            }),
+            numeric({
+                name: 'comfort_humidity_min',
+                unit: '%',
+                cluster: 'hvacUserInterfaceCfg',
+                attribute: {ID: 0x0104, type: Zcl.DataType.UINT16},
+                valueMin: 0.0,
+                valueMax: 100.0,
+                scale: 100,
+                description: 'Comfort parameters/Humidity minimum, in 1% steps.',
+            }),
+            numeric({
+                name: 'comfort_humidity_max',
+                unit: '%',
+                cluster: 'hvacUserInterfaceCfg',
+                attribute: {ID: 0x0105, type: Zcl.DataType.UINT16},
+                valueMin: 0.0,
+                valueMax: 100.0,
+                scale: 100,
+                description: 'Comfort parameters/Humidity maximum, in 1% steps.',
+            }),
+            numeric({
+                name: 'measurement_interval',
+                unit: 's',
+                cluster: 'hvacUserInterfaceCfg',
+                attribute: {ID: 0x0107, type: Zcl.DataType.UINT8},
+                valueMin: 3,
+                valueMax: 255,
+                description: 'Measurement interval, default 10 seconds.',
+            }),
+        ],
+        ota: ota.zigbeeOTA,
+        configure: async (device, coordinatorEndpoint, logger) => {
+            const endpoint = device.getEndpoint(1);
+            const bindClusters = ['msTemperatureMeasurement', 'msRelativeHumidity', 'genPowerCfg'];
+            await reporting.bind(endpoint, coordinatorEndpoint, bindClusters);
+            await reporting.temperature(endpoint, {min: 10, max: 300, change: 10});
+            await reporting.humidity(endpoint, {min: 10, max: 300, change: 50});
+            await reporting.batteryPercentageRemaining(endpoint);
+            try {
+                await endpoint.read('hvacThermostat', [0x0010, 0x0011, 0x0102, 0x0103, 0x0104, 0x0105, 0x0107]);
+                await endpoint.read('msTemperatureMeasurement', [0x0010]);
+                await endpoint.read('msRelativeHumidity', [0x0010]);
+            } catch (e) {
+                /* backward compatibility */
+            }
+        },
+    },
+    {
         zigbeeModel: ['QUAD-ZIG-SW'],
         model: 'QUAD-ZIG-SW',
         vendor: 'smarthjemmet.dk',
@@ -896,6 +1076,30 @@ const definitions: Definition[] = [
         endpoint: (device) => {
             return {l3: 3, l5: 5, l6: 6};
         },
+    },
+    {
+        zigbeeModel: ['alab.switch'],
+        model: 'alab.switch',
+        vendor: 'Alab',
+        description: 'Four channel relay board with four inputs',
+        extend: [
+            deviceEndpoints({endpoints: {'l1': 1, 'l2': 2, 'l3': 3, 'l4': 4, 'in1': 5, 'in2': 6, 'in3': 7, 'in4': 8}}),
+            onOff({
+                powerOnBehavior: false,
+                configureReporting: false,
+                endpointNames: ['l1', 'l2', 'l3', 'l4']},
+            ),
+            commandsOnOff({endpointNames: ['l1', 'l2', 'l3', 'l4']}),
+            numeric({
+                name: 'input_state',
+                valueMin: 0,
+                valueMax: 1,
+                cluster: 'genAnalogInput',
+                attribute: 'presentValue',
+                description: 'Input state',
+                endpointNames: ['in1', 'in2', 'in3', 'in4'],
+            }),
+        ],
     },
 ];
 

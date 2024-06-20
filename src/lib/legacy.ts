@@ -769,7 +769,7 @@ const dataPoints = {
     moes105DimmerLevel1: 2,
     moes105DimmerState2: 7,
     moes105DimmerLevel2: 8,
-    // TuYa Radar Sensor
+    // Tuya Radar Sensor
     trsPresenceState: 1,
     trsSensitivity: 2,
     trsMotionState: 102,
@@ -778,7 +778,7 @@ const dataPoints = {
     trsScene: 112,
     trsMotionDirection: 114,
     trsMotionSpeed: 115,
-    // TuYa Radar Sensor with fall function
+    // Tuya Radar Sensor with fall function
     trsfPresenceState: 1,
     trsfSensitivity: 2,
     trsfMotionState: 102,
@@ -945,7 +945,7 @@ const dataPoints = {
     connecteTempProgram: 105,
     connecteOpenWindow: 106,
     connecteMaxProtectTemp: 107,
-    // TuYa Smart Human Presence Sensor
+    // Tuya Smart Human Presence Sensor
     tshpsPresenceState: 1,
     tshpscSensitivity: 2,
     tshpsMinimumRange: 3,
@@ -956,7 +956,7 @@ const dataPoints = {
     tshpsIlluminanceLux: 104,
     tshpsCLI: 103, // not recognize
     tshpsSelfTest: 6, // not recognize
-    // TuYa Luminance Motion sensor
+    // Tuya Luminance Motion sensor
     lmsState: 1,
     lmsBattery: 4,
     lmsSensitivity: 9,
@@ -3062,68 +3062,6 @@ const fromZigbee1 = {
                 delete result.pi_heating_demand;
             }
 
-            return result;
-        },
-    } satisfies Fz.Converter,
-    eurotronic_thermostat: {
-        cluster: 'hvacThermostat',
-        type: ['attributeReport', 'readResponse'],
-        options: [exposes.options.legacy()],
-        convert: (model, msg, publish, options, meta) => {
-            if (!utils.isLegacyEnabled(options)) {
-                return fromZigbeeConverters.eurotronic_thermostat.convert(model, msg, publish, options, meta);
-            }
-
-            const result = fromZigbee.thermostat_att_report.convert(model, msg, publish, options, meta) as KeyValueAny;
-            // system_mode is always 'heat', we set it below based on eurotronic_host_flags
-            if (result.system_mode) {
-                delete result['system_mode'];
-            }
-            if (typeof msg.data[0x4003] == 'number') {
-                result.current_heating_setpoint =
-                    utils.precisionRound(msg.data[0x4003], 2) / 100;
-            }
-            if (typeof msg.data[0x4008] == 'number') {
-                result.eurotronic_host_flags = msg.data[0x4008];
-                const resultHostFlags = {
-                    'mirror_display': false,
-                    'boost': false,
-                    'window_open': false,
-                    'child_protection': false,
-                };
-                if ((result.eurotronic_host_flags & 1 << 2) != 0) {
-                    // system_mode => 'heat', boost mode
-                    result.system_mode = thermostatSystemModes[4];
-                    resultHostFlags.boost = true;
-                } else if ((result.eurotronic_host_flags & (1 << 4)) != 0 ) {
-                    // system_mode => 'off', window open detected
-                    result.system_mode = thermostatSystemModes[0];
-                    resultHostFlags.window_open = true;
-                } else {
-                    // system_mode => 'auto', default
-                    result.system_mode = thermostatSystemModes[1];
-                }
-                if ((result.eurotronic_host_flags & (1 << 1)) != 0 ) {
-                    // mirror_display
-                    resultHostFlags.mirror_display = true;
-                }
-                if ((result.eurotronic_host_flags & (1 << 7)) != 0 ) {
-                    // child protection
-                    resultHostFlags.child_protection = true;
-                }
-                // keep eurotronic_system_mode for compatibility (is there a way to mark this as deprecated?)
-                result.eurotronic_system_mode = result.eurotronic_host_flags;
-                result.eurotronic_host_flags = resultHostFlags;
-            }
-            if (typeof msg.data[0x4002] == 'number') {
-                result.eurotronic_error_status = msg.data[0x4002];
-            }
-            if (typeof msg.data[0x4000] == 'number') {
-                result.eurotronic_trv_mode = msg.data[0x4000];
-            }
-            if (typeof msg.data[0x4001] == 'number') {
-                result.eurotronic_valve_position = msg.data[0x4001];
-            }
             return result;
         },
     } satisfies Fz.Converter,
@@ -5770,7 +5708,7 @@ const toZigbee1 = {
                     value = invert ? 100 - value : value;
                     await sendDataPointValue(entity, dataPoints.coverPosition, value);
                 } else {
-                    throw new Error('TuYa_cover_control: Curtain motor position is out of range');
+                    throw new Error('Tuya_cover_control: Curtain motor position is out of range');
                 }
             } else if (key === 'state') {
                 const stateEnums = getCoverStateEnums(meta.device.manufacturerName);
@@ -5791,7 +5729,7 @@ const toZigbee1 = {
                     await sendDataPointEnum(entity, dataPoints.state, stateEnums.stop);
                     break;
                 default:
-                    throw new Error('TuYa_cover_control: Invalid command received');
+                    throw new Error('Tuya_cover_control: Invalid command received');
                 }
             }
         },
@@ -5809,7 +5747,7 @@ const toZigbee2 = {
                 if (value >= 0 && value <= 100) {
                     await sendDataPointValue(entity, dataPoints.coverPosition, value);
                 } else {
-                    throw new Error('TuYa_cover_control: Curtain motor position is out of range');
+                    throw new Error('Tuya_cover_control: Curtain motor position is out of range');
                 }
                 break;
             }
@@ -5832,7 +5770,7 @@ const toZigbee2 = {
                     await sendDataPointEnum(entity, dataPoints.state, stateEnums.stop);
                     break;
                 default:
-                    throw new Error('TuYa_cover_control: Invalid command received');
+                    throw new Error('Tuya_cover_control: Invalid command received');
                 }
                 break;
             }
@@ -7262,7 +7200,7 @@ const toZigbee2 = {
 
             if (value.motor_speed != undefined) {
                 if (value.motor_speed < 0 || value.motor_speed > 255) {
-                    throw new Error('TuYa_cover_control: Motor speed is out of range');
+                    throw new Error('Tuya_cover_control: Motor speed is out of range');
                 }
 
                 logger.info(`Setting motor speed to ${value.motor_speed}`, 'zhc:legacy:tz:tuya_cover_options');
@@ -8141,7 +8079,7 @@ const toZigbee2 = {
                     value = invert ? 100 - value : value;
                     await sendDataPointValue(entity, dataPoints.coverPosition, value);
                 } else {
-                    throw new Error('TuYa_cover_control: Curtain motor position is out of range');
+                    throw new Error('Tuya_cover_control: Curtain motor position is out of range');
                 }
             } else if (key === 'state') {
                 const stateEnums = getCoverStateEnums(meta.device.manufacturerName);
@@ -8402,4 +8340,5 @@ export {
     convertTimeTo2ByteHexArray,
     getMetaValue,
     tuyaGetDataValue,
+    ictcg1,
 };

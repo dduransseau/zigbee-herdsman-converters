@@ -8,7 +8,22 @@ import * as globalStore from '../lib/store';
 import * as constants from '../lib/constants';
 import * as utils from '../lib/utils';
 import {Definition, Fz, Zh} from '../lib/types';
-import {deviceEndpoints, electricityMeter, light, onOff} from '../lib/modernExtend';
+import {
+    deviceEndpoints,
+    electricityMeter,
+    light,
+    onOff,
+    battery,
+    identify,
+    occupancy,
+    temperature,
+    humidity,
+    illuminance,
+    commandsOnOff,
+    commandsLevelCtrl,
+    commandsColorCtrl,
+    commandsScenes,
+} from '../lib/modernExtend';
 import {logger} from '../lib/logger';
 
 const NS = 'zhc:sunricher';
@@ -57,6 +72,35 @@ async function syncTime(endpoint: Zh.Endpoint) {
 
 const definitions: Definition[] = [
     {
+        zigbeeModel: ['ZG2858A'],
+        model: 'ZG2858A',
+        vendor: 'Sunricher',
+        description: 'Zigbee handheld remote RGBCCT 3 channels',
+        extend: [
+            deviceEndpoints({endpoints: {'1': 1, '2': 2, '3': 3}}),
+            battery(),
+            identify(),
+            commandsOnOff(),
+            commandsLevelCtrl(),
+            commandsColorCtrl(),
+            commandsScenes(),
+        ],
+    },
+    {
+        zigbeeModel: ['HK-SL-DIM-US-A'],
+        model: 'HK-SL-DIM-US-A',
+        vendor: 'Sunricher',
+        description: 'Keypad smart dimmer',
+        extend: [light({configureReporting: true}), electricityMeter()],
+    },
+    {
+        zigbeeModel: ['HK-SENSOR-4IN1-A'],
+        model: 'HK-SENSOR-4IN1-A',
+        vendor: 'Sunricher',
+        description: '4IN1 Sensor',
+        extend: [battery(), identify(), occupancy(), temperature(), humidity(), illuminance()],
+    },
+    {
         zigbeeModel: ['SR-ZG9023A-EU'],
         model: 'SR-ZG9023A-EU',
         vendor: 'Sunricher',
@@ -88,7 +132,7 @@ const definitions: Definition[] = [
         endpoint: (device) => {
             return {'l1': 1, 'l2': 2};
         },
-        meta: {multiEndpoint: true},
+        meta: {multiEndpoint: true, multiEndpointSkip: ['power', 'energy', 'voltage', 'current']},
         configure: async (device, coordinatorEndpoint) => {
             const endpoint1 = device.getEndpoint(1);
             const endpoint2 = device.getEndpoint(2);
@@ -289,24 +333,6 @@ const definitions: Definition[] = [
         },
     },
     {
-        zigbeeModel: ['ZG2858A'],
-        model: 'ZG2858A',
-        vendor: 'Sunricher',
-        description: 'Zigbee handheld remote RGBCCT 3 channels',
-        fromZigbee: [fz.battery, fz.command_move_to_color, fz.command_move_to_color_temp, fz.command_move_hue,
-            fz.command_step, fz.command_recall, fz.command_on, fz.command_off, fz.command_toggle, fz.command_stop,
-            fz.command_move, fz.command_color_loop_set, fz.command_ehanced_move_to_hue_and_saturation],
-        exposes: [e.battery(), e.action([
-            'color_move', 'color_temperature_move', 'hue_move', 'brightness_step_up', 'brightness_step_down',
-            'recall_*', 'on', 'off', 'toggle', 'brightness_stop', 'brightness_move_up', 'brightness_move_down',
-            'color_loop_set', 'enhanced_move_to_hue_and_saturation', 'hue_stop'])],
-        toZigbee: [],
-        meta: {multiEndpoint: true},
-        endpoint: (device) => {
-            return {ep1: 1, ep2: 2, ep3: 3};
-        },
-    },
-    {
         zigbeeModel: ['HK-ZCC-A'],
         model: 'SR-ZG9080A',
         vendor: 'Sunricher',
@@ -423,7 +449,7 @@ const definitions: Definition[] = [
                 const endpoint = device.getEndpoint(1);
                 const hours24 = 1000 * 60 * 60 * 24;
                 // Device does not ask for the time with binding, therefore we write the time every 24 hours
-                const interval = setInterval(async () => syncTime(endpoint), hours24);
+                const interval = setInterval(async () => await syncTime(endpoint), hours24);
                 globalStore.putValue(device, 'time', interval);
             }
         },
@@ -623,7 +649,7 @@ const definitions: Definition[] = [
             );
 
             // Device does not asks for the time with binding, we need to write time during configure
-            syncTime(endpoint);
+            await syncTime(endpoint);
 
             // Trigger initial read
             await endpoint.read('hvacThermostat', ['systemMode', 'runningState', 'occupiedHeatingSetpoint']);

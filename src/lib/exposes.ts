@@ -618,6 +618,7 @@ export const options = {
     illuminance_below_threshold_check: () => new Binary(`illuminance_below_threshold_check`, access.SET, true, false).withDescription(`Set to false to also send messages when illuminance is above threshold in night mode (default true).`),
     state_action: () => new Binary(`state_action`, access.SET, true, false).withDescription(`State actions will also be published as 'action' when true (default false).`),
     identify_timeout: () => new Numeric('identify_timeout', access.SET).withDescription('Sets duration of identification procedure in seconds (i.e., how long device would flash). Value ranges from 1 to 30 seconds (default 3).').withValueMin(1).withValueMax(30),
+    cover_position_tilt_disable_report: () => new Binary(`cover_position_tilt_disable_report`, access.SET, true, false).withDescription(`Do not publish set cover target position as a normal 'position' value (default false).`),
 };
 
 export const presets = {
@@ -663,6 +664,11 @@ export const presets = {
     cover_position: () => new Cover().withPosition(),
     cover_position_tilt: () => new Cover().withPosition().withTilt(),
     cover_tilt: () => new Cover().withTilt(),
+    cover_mode: () => new Composite('cover_mode', 'cover_mode', access.ALL)
+        .withFeature(new Binary('reversed', access.ALL, true, false).withDescription('Reversal of the motor rotating direction'))
+        .withFeature(new Binary('calibration', access.ALL, true, false).withDescription('Set the cover calibration mode'))
+        .withFeature(new Binary('maintenance', access.ALL, true, false).withDescription('Set the cover maintenance mode, enabling will disable the cover motor'))
+        .withFeature(new Binary('led', access.ALL, true, false).withDescription('Set the LED')),
     cpu_temperature: () => new Numeric('cpu_temperature', access.STATE).withLabel('CPU temperature').withUnit('°C').withDescription('Temperature of the CPU'),
     cube_side: (name: string) => new Numeric(name, access.STATE).withDescription('Side of the cube').withValueMin(0).withValueMax(6).withValueStep(1),
     current: () => new Numeric('current', access.STATE).withUnit('A').withDescription('Instantaneous measured electrical current').withCategory('diagnostic'),

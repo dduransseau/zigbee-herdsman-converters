@@ -24,7 +24,7 @@ export const dataTypes = {
     bitmap: 5, // [ 1,2,4 bytes ] as bits
 };
 
-function convertBufferToNumber(chunks: Buffer | number[]) {
+export function convertBufferToNumber(chunks: Buffer | number[]) {
     let value = 0;
     for (let i = 0; i < chunks.length; i++) {
         value = value << 8;
@@ -127,7 +127,7 @@ function getDataValue(dpValue: Tuya.DpValue) {
     }
 }
 
-function convertDecimalValueTo4ByteHexArray(value: number) {
+export function convertDecimalValueTo4ByteHexArray(value: number) {
     const hexValue = Number(value).toString(16).padStart(8, '0');
     const chunk1 = hexValue.substring(0, 2);
     const chunk2 = hexValue.substring(2, 4);
@@ -201,7 +201,7 @@ export async function onEventSetTime(type: OnEventType, data: KeyValue, device: 
 export async function onEventSetLocalTime(type: OnEventType, data: KeyValue, device: Zh.Device) {
     // FIXME: What actually nextLocalTimeUpdate/forceTimeUpdate do?
     //  I did not find any timers or something else where it was used.
-    //  Actually, there are two ways to set time on TuYa MCU devices:
+    //  Actually, there are two ways to set time on Tuya MCU devices:
     //  1. Respond to the `commandMcuSyncTime` event
     //  2. Just send `mcuSyncTime` anytime (by 1-hour timer or something else)
 
@@ -326,7 +326,7 @@ const tuyaExposes = {
         .withDescription(`Sum of consumed energy (phase ${phase.toUpperCase()})`),
     energyProducedWithPhase: (phase: string) => e.numeric(`energy_produced_${phase}`, ea.STATE).withUnit('kWh')
         .withDescription(`Sum of produced energy (phase ${phase.toUpperCase()})`),
-    energyFlowWithPhase: (phase: string) => e.enum(`energy_flow_${phase}`, ea.STATE, ['consuming', 'producing'])
+    energyFlowWithPhase: (phase: string, more: [string]) => e.enum(`energy_flow_${phase}`, ea.STATE, ['consuming', 'producing', ...more])
         .withDescription(`Direction of energy (phase ${phase.toUpperCase()})`),
     voltageWithPhase: (phase: string) => e.numeric(`voltage_${phase}`, ea.STATE).withUnit('V')
         .withDescription(`Measured electrical potential value (phase ${phase.toUpperCase()})`),
@@ -379,7 +379,7 @@ export const configureMagicPacket = async (device: Zh.Device, coordinatorEndpoin
         const endpoint = device.endpoints[0];
         await endpoint.read('genBasic', ['manufacturerName', 'zclVersion', 'appVersion', 'modelId', 'powerSource', 0xfffe]);
     } catch (e) {
-        // Fails for some TuYa devices with UNSUPPORTED_ATTRIBUTE, ignore that.
+        // Fails for some Tuya devices with UNSUPPORTED_ATTRIBUTE, ignore that.
         // e.g. https://github.com/Koenkk/zigbee2mqtt/issues/14857
         if (e.message.includes('UNSUPPORTED_ATTRIBUTE')) {
             logger.debug('configureMagicPacket failed, ignoring...', NS);
@@ -563,6 +563,7 @@ export const valueConverter = {
     powerOnBehavior: valueConverterBasic.lookup({'off': 0, 'on': 1, 'previous': 2}),
     powerOnBehaviorEnum: valueConverterBasic.lookup({'off': new Enum(0), 'on': new Enum(1), 'previous': new Enum(2)}),
     switchType: valueConverterBasic.lookup({'momentary': new Enum(0), 'toggle': new Enum(1), 'state': new Enum(2)}),
+    switchType2: valueConverterBasic.lookup({'toggle': new Enum(0), 'state': new Enum(1), 'momentary': new Enum(2)}),
     backlightModeOffNormalInverted: valueConverterBasic.lookup({'off': new Enum(0), 'normal': new Enum(1), 'inverted': new Enum(2)}),
     backlightModeOffLowMediumHigh: valueConverterBasic.lookup({'off': new Enum(0), 'low': new Enum(1), 'medium': new Enum(2), 'high': new Enum(3)}),
     lightType: valueConverterBasic.lookup({'led': 0, 'incandescent': 1, 'halogen': 2}),
@@ -1082,7 +1083,7 @@ const tuyaTz = {
             await entity.write('genOnOff', {0x8000: {value: v, type: 0x10}});
         },
     } satisfies Tz.Converter,
-    min_brightness: {
+    min_brightness_attribute: {
         key: ['min_brightness'],
         convertSet: async (entity, key, value, meta) => {
             const number = utils.toNumber(value, `min_brightness`);
@@ -1096,6 +1097,20 @@ const tuyaTz = {
         convertGet: async (entity, key, meta) => {
             await entity.read('genLevelCtrl', [0xfc00]);
         },
+    } satisfies Tz.Converter,
+    min_brightness_command: {
+        key: ['min_brightness'],
+        convertSet: async (entity, key, value, meta) => {
+            utils.assertNumber(value, key);
+            const payload = {minimum: value};
+            await entity.command('lightingColorCtrl', 'tuyaSetMinimumBrightness', payload);
+            return {state: {min_brightness: value}};
+        },
+        // The response contains the value but as the data type, randomly
+        // causing malformed messages
+        // convertGet: async (entity, key, meta) => {
+        //    await entity.read('lightingColorCtrl', [0xf102]);
+        // },
     } satisfies Tz.Converter,
     color_power_on_behavior: {
         key: ['color_power_on_behavior'],
@@ -1135,7 +1150,9 @@ const tuyaTz = {
             'screen_orientation', 'regulator_period', 'regulator_set_point', 'upper_stroke_limit', 'middle_stroke_limit', 'lower_stroke_limit',
             'buzzer_feedback', 'rf_pairing', 'max_temperature_alarm', 'min_temperature_alarm', 'max_humidity_alarm', 'min_humidity_alarm',
             'temperature_periodic_report', 'humidity_periodic_report', 'temperature_sensitivity', 'humidity_sensitivity', 'temperature_alarm',
-            'humidity_alarm', 'move_sensitivity', 'radar_range', 'presence_timeout',
+            'humidity_alarm', 'move_sensitivity', 'radar_range', 'presence_timeout', 'update_frequency', 'remote_pair', 'motor_working_mode',
+            'restart_mode', 'rf_remote_control', 'motion_detection_sensitivity', 'motion_detection_mode', 'vacation', 'keysound', 'handlesound',
+            'calibrate',
         ],
         convertSet: async (entity, key, value, meta) => {
             // A set converter is only called once; therefore we need to loop
@@ -1186,6 +1203,61 @@ const tuyaTz = {
             return {state: {do_not_disturb: value}};
         },
     } satisfies Tz.Converter,
+    on_off_countdown: {
+        // Note: This is the Tuya on-off countdown feature documented for switches and smart plugs
+        //       using the Zigbee 'onWithTimedOff' command in a non-standard way.
+        //       There is also an alternative on-off countdown implementation mostly for for Tuya Lighting
+        //       products that uses private commands and attributes. However, those devices should also
+        //       provide datapoints so there is little reason to provide support.
+        key: ['state', 'countdown'],
+        convertSet: async (entity, key, value, meta) => {
+            const state = meta.message.hasOwnProperty('state') ?
+                ( utils.isString(meta.message.state) ? meta.message.state.toLowerCase() : null ) :
+                undefined;
+            const countdown = meta.message.hasOwnProperty('countdown') ? meta.message.countdown : undefined;
+            const result: KeyValue = {};
+            if ( countdown !== undefined ) {
+                // OnTime is a 16bit register and so might very well work up to 0xFFFF seconds but
+                // the Tuya documentation says that the maximum is 43200 (so 12 hours).
+                // @ts-expect-error
+                if ( !Number.isInteger(countdown) || countdown < 0 || countdown > 12*3600 ) {
+                    throw new Error('countdown must be an integer between 1 and 43200 (12 hours) or 0 to cancel' );
+                }
+            }
+            // The order of the commands matters because 'on/off/toggle' cancels 'onWithTimedOff'.
+            if (state !== undefined) {
+                utils.validateValue(state, ['toggle', 'off', 'on']);
+                await entity.command('genOnOff', state, {}, utils.getOptions(meta.mapped, entity));
+                if (state === 'toggle') {
+                    const currentState = meta.state[`state${meta.endpoint_name ? `_${meta.endpoint_name}` : ''}`];
+                    if (currentState) {
+                        result.state = currentState === 'OFF' ? 'ON' : 'OFF';
+                    }
+                } else {
+                    result.state = state.toUpperCase();
+                }
+                // A side effect of setting the state is to cancel any running coundown.
+                result.countdown = 0;
+            }
+            if (countdown !== undefined) {
+                // offwaittime is probably not used but according to the Tuya documentation, it should
+                // be set to the same value than ontime.
+                const payload = {ctrlbits: 0, ontime: countdown, offwaittime: countdown};
+                await entity.command('genOnOff', 'onWithTimedOff', payload, utils.getOptions(meta.mapped, entity));
+                if (result.hasOwnProperty('state')) {
+                    result.countdown = countdown;
+                }
+            }
+            return {state: result};
+        },
+        convertGet: async (entity, key, meta) => {
+            if (key=='state') {
+                await entity.read('genOnOff', ['onOff']);
+            } else if (key=='countdown') {
+                await entity.read('genOnOff', ['onTime']);
+            }
+        },
+    } satisfies Tz.Converter,
 };
 export {tuyaTz as tz};
 
@@ -1196,7 +1268,7 @@ const tuyaFz = {
         convert: (model, msg, publish, options, meta) => {
             if (msg.data.hasOwnProperty('61440')) {
                 const property = utils.postfixWithEndpointName('brightness', msg, model, meta);
-                return {[property]: msg.data['61440']};
+                return {[property]: utils.mapNumberRange(msg.data['61440'], 0, 1000, 0, 255)};
             }
         },
     } satisfies Fz.Converter,
@@ -1304,7 +1376,7 @@ const tuyaFz = {
             }
         },
     } satisfies Fz.Converter,
-    min_brightness: {
+    min_brightness_attribute: {
         cluster: 'genLevelCtrl',
         type: ['attributeReport', 'readResponse'],
         convert: (model, msg, publish, options, meta) => {
@@ -1328,9 +1400,9 @@ const tuyaFz = {
                 const value = getDataValue(dpValue);
                 if (dpEntry?.[2]?.from) {
                     if (dpEntry[1]) {
-                        result[dpEntry[1]] = dpEntry[2].from(value, meta, options, publish);
+                        result[dpEntry[1]] = dpEntry[2].from(value, meta, options, publish, msg);
                     } else {
-                        Object.assign(result, dpEntry[2].from(value, meta, options, publish));
+                        Object.assign(result, dpEntry[2].from(value, meta, options, publish, msg));
                     }
                 } else {
                     logger.debug(`Datapoint ${dpId} not defined for '${meta.device.manufacturerName}' with value ${value}`, NS);
@@ -1339,10 +1411,39 @@ const tuyaFz = {
             return result;
         },
     } satisfies Fz.Converter,
+    on_off_action: {
+        cluster: 'genOnOff',
+        type: 'commandTuyaAction',
+        convert: (model, msg, publish, options, meta) => {
+            if (utils.hasAlreadyProcessedMessage(msg, model)) return;
+            const clickMapping: KeyValueNumberString = {0: 'single', 1: 'double', 2: 'hold'};
+            const buttonMapping: KeyValueNumberString = {1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8'};
+            // TS004F has single endpoint, TS0041A/TS0041 can have multiple but have just one button
+            const button = msg.device.endpoints.length == 1 || ['TS0041A', 'TS0041'].includes(msg.device.modelID) ?
+                '' : `${buttonMapping[msg.endpoint.ID]}_`;
+            return {action: `${button}${clickMapping[msg.data.value]}`};
+        },
+    } satisfies Fz.Converter,
+    on_off_countdown: {
+        // While a countdown is in progress, the device will report onTime at all multiples of 60.
+        // More reportings can be configured for 'onTime` but they will happen independently of
+        // the builtin 60s reporting.
+        cluster: 'genOnOff',
+        type: ['attributeReport', 'readResponse'],
+        convert: (model, msg, publish, options, meta) => {
+            if (msg.data.hasOwnProperty('onTime')) {
+                const payload: KeyValue = {};
+                const property = utils.postfixWithEndpointName('countdown', msg, model, meta);
+                const countdown = msg.data['onTime'];
+                payload[property] = countdown;
+                return payload;
+            }
+        },
+    } satisfies Fz.Converter,
 };
 export {tuyaFz as fz};
 
-function getHandlersForDP(name: string, dp: number, type: number, converter: Tuya.ValueConverterSingle,
+export function getHandlersForDP(name: string, dp: number, type: number, converter: Tuya.ValueConverterSingle,
     readOnly?: boolean, skip?: (meta: Tz.Meta) => boolean, endpoint?: string, useGlobalSequence?: boolean): [Fz.Converter[], Tz.Converter[]] {
     const keyName = (endpoint) ? `${name}_${endpoint}` : name;
     const fromZigbee: Fz.Converter[] = [{
@@ -1551,7 +1652,7 @@ const tuyaModernExtend = {
         return {exposes: [exp], fromZigbee, toZigbee, isModernExtend: true};
     },
     dpTemperature(args?: Partial<TuyaDPNumericArgs>): ModernExtend {
-        return tuyaModernExtend.dpNumeric({name: 'temperature', type: dataTypes.number, readOnly: true, expose: e.temperature(), ...args});
+        return tuyaModernExtend.dpNumeric({name: 'temperature', type: dataTypes.number, readOnly: true, scale: 10, expose: e.temperature(), ...args});
     },
     dpHumidity(args?: Partial<TuyaDPNumericArgs>): ModernExtend {
         return tuyaModernExtend.dpNumeric({name: 'humidity', type: dataTypes.number, readOnly: true, expose: e.humidity(), ...args});
@@ -1597,8 +1698,8 @@ const tuyaModernExtend = {
         return tuyaModernExtend.dpEnumLookup({name: 'power_on_behavior', lookup: lookup, type: dataTypes.enum,
             expose: e.power_on_behavior(Object.keys(lookup)).withAccess(readOnly ? ea.STATE : ea.STATE_SET), ...args});
     },
-    tuyaLight(args?: modernExtend.LightArgs & {minBrightness?: boolean, switchType?: boolean}) {
-        args = {minBrightness: false, powerOnBehavior: false, switchType: false, ...args};
+    tuyaLight(args?: modernExtend.LightArgs & {minBrightness?: 'none' | 'attribute' | 'command', switchType?: boolean}) {
+        args = {minBrightness: 'none', powerOnBehavior: false, switchType: false, ...args};
         if (args.colorTemp) {
             args.colorTemp = {startup: false, ...args.colorTemp};
         }
@@ -1628,10 +1729,13 @@ const tuyaModernExtend = {
             result.exposes.push(tuyaExposes.switchType());
         }
 
-        if (args.minBrightness) {
-            result.fromZigbee.push(tuyaFz.min_brightness);
-            result.toZigbee.push(tuyaTz.min_brightness);
+        if (args.minBrightness === 'attribute') {
+            result.fromZigbee.push(tuyaFz.min_brightness_attribute);
+            result.toZigbee.push(tuyaTz.min_brightness_attribute);
             result.exposes = result.exposes.map((e) => utils.isLightExpose(e) ? e.withMinBrightness() : e);
+        } else if (args.minBrightness === 'command') {
+            result.toZigbee.push(tuyaTz.min_brightness_command);
+            result.exposes = result.exposes.map((e) => utils.isLightExpose(e) ? e.withMinBrightness().setAccess('min_brightness', ea.STATE_SET) : e);
         }
 
         if (args.color) {
@@ -1644,11 +1748,22 @@ const tuyaModernExtend = {
     tuyaOnOff: (args: {
         endpoints?: string[], powerOutageMemory?: boolean, powerOnBehavior2?: boolean, switchType?: boolean, backlightModeLowMediumHigh?: boolean,
         indicatorMode?: boolean, backlightModeOffNormalInverted?: boolean, backlightModeOffOn?: boolean, electricalMeasurements?: boolean,
-        electricalMeasurementsFzConverter?: Fz.Converter, childLock?: boolean, switchMode?: boolean,
+        electricalMeasurementsFzConverter?: Fz.Converter, childLock?: boolean, switchMode?: boolean, onOffCountdown?: boolean,
     }={}): ModernExtend => {
         const exposes: Expose[] = args.endpoints ? args.endpoints.map((ee) => e.switch().withEndpoint(ee)) : [e.switch()];
         const fromZigbee: Fz.Converter[] = [fz.on_off, fz.ignore_basic_report];
-        const toZigbee: Tz.Converter[] = [tz.on_off];
+        const toZigbee: Tz.Converter[] = [];
+        if (args.onOffCountdown) {
+            fromZigbee.push(tuyaFz.on_off_countdown);
+            toZigbee.push(tuyaTz.on_off_countdown);
+            if (args.endpoints) {
+                exposes.push(...args.endpoints.map((ee) => tuyaExposes.countdown().withAccess(ea.ALL).withEndpoint(ee)));
+            } else {
+                exposes.push(tuyaExposes.countdown().withAccess(ea.ALL));
+            }
+        } else {
+            toZigbee.push(tz.on_off);
+        }
         if (args.powerOutageMemory) {
             // Legacy, powerOnBehavior is preferred
             fromZigbee.push(tuyaFz.power_outage_memory);
@@ -1766,7 +1881,26 @@ const tuyaModernExtend = {
         return {exposes: [exp], toZigbee, fromZigbee, isModernExtend: true};
     },
     tuyaMagicPacket(): ModernExtend {
-        return {configure: configureMagicPacket, isModernExtend: true};
+        return {configure: [configureMagicPacket], isModernExtend: true};
+    },
+    tuyaOnOffAction(args?: Partial<modernExtend.ActionEnumLookupArgs>): ModernExtend {
+        return modernExtend.actionEnumLookup({
+            actionLookup: {0: 'single', 1: 'double', 2: 'hold'},
+            cluster: 'genOnOff',
+            commands: ['commandTuyaAction'],
+            attribute: 'value',
+        });
+    },
+    tuyaOnOffActionLegacy(args: {actions: ('single' | 'double' | 'hold')[], endpointNames?: string[]}): ModernExtend {
+        // For new devices use tuyaOnOffAction instead
+        const actions = args.actions.map((a) => args.endpointNames ? args.endpointNames.map((e) => `${e}_${a}`) : [a]).flat();
+        const exposes: Expose[] = [e.action(actions)];
+        const fromZigbee: Fz.Converter[] = [tuyaFz.on_off_action];
+        return {exposes, fromZigbee, isModernExtend: true};
+    },
+    dpChildLock(args?: Partial<TuyaDPBinaryArgs>): ModernExtend {
+        return tuyaModernExtend.dpBinary({name: 'child_lock', type: dataTypes.bool,
+            valueOn: ['LOCK', true], valueOff: ['UNLOCK', false], expose: e.child_lock(), ...args});
     },
 };
 export {tuyaModernExtend as modernExtend};

@@ -1,5 +1,5 @@
 import {Zcl} from 'zigbee-herdsman';
-import {Tz, KeyValueAny} from '../lib/types';
+import {Tz, KeyValue, KeyValueAny} from '../lib/types';
 import * as globalStore from '../lib/store';
 import * as constants from '../lib/constants';
 import * as libColor from '../lib/color';
@@ -597,12 +597,17 @@ const converters2 = {
     } satisfies Tz.Converter,
     cover_position_tilt: {
         key: ['position', 'tilt'],
-        options: [exposes.options.invert_cover()],
+        options: [
+            exposes.options.invert_cover(),
+            exposes.options.cover_position_tilt_disable_report(),
+        ],
         convertSet: async (entity, key, value, meta) => {
             utils.assertNumber(value, key);
             const isPosition = (key === 'position');
             const invert = !(utils.getMetaValue(entity, meta.mapped, 'coverInverted', 'allEqual', false) ?
                 !meta.options.invert_cover : meta.options.invert_cover);
+            const disableReport = (utils.getMetaValue(entity, meta.mapped, 'coverPositionTiltDisableReport', 'allEqual', false) ?
+                !meta.options.cover_position_tilt_disable_report : meta.options.cover_position_tilt_disable_report);
             const position = invert ? 100 - value : value;
 
             // Zigbee officially expects 'open' to be 0 and 'closed' to be 100 whereas
@@ -614,12 +619,31 @@ const converters2 = {
                 isPosition ? {percentageliftvalue: position} : {percentagetiltvalue: position},
                 utils.getOptions(meta.mapped, entity),
             );
-
-            return {state: {[isPosition ? 'position' : 'tilt']: value}};
+            if (disableReport) {
+                return;
+            } else {
+                return {state: {[isPosition ? 'position' : 'tilt']: value}};
+            }
         },
         convertGet: async (entity, key, meta) => {
             const isPosition = (key === 'position');
             await entity.read('closuresWindowCovering', [isPosition ? 'currentPositionLiftPercentage' : 'currentPositionTiltPercentage']);
+        },
+    } satisfies Tz.Converter,
+    cover_mode: {
+        key: ['cover_mode'],
+        convertSet: async (entity, key, value, meta) => {
+            utils.assertObject(value, key);
+            const windowCoveringMode =
+                (value.reversed ? 1 : 0) << 0 |
+                (value.calibration ? 1 : 0) << 1 |
+                (value.maintenance ? 1 : 0) << 2 |
+                (value.led ? 1 : 0) << 3;
+            await entity.write('closuresWindowCovering', {windowCoveringMode}, utils.getOptions(meta.mapped, entity));
+            return {state: {cover_mode: value}};
+        },
+        convertGet: async (entity, key, meta) => {
+            await entity.read('closuresWindowCovering', ['windowCoveringMode']);
         },
     } satisfies Tz.Converter,
     occupancy_timeout: {
@@ -1234,8 +1258,17 @@ const converters2 = {
                 utils.assertString(value, key);
                 const lookup = {blink: 0, breathe: 1, okay: 2, channel_change: 11, finish_effect: 254, stop_effect: 255};
                 value = value.toLowerCase();
-                const payload = {effectid: utils.getFromLookup(value, lookup), effectvariant: 0};
-                await entity.command('genIdentify', 'triggerEffect', payload, utils.getOptions(meta.mapped, entity));
+                if (value === 'colorloop') {
+                    const transition = meta.message.transition ?? 15;
+                    utils.assertNumber(transition, 'transition');
+                    const speed = Math.min(255, Math.max(1, Math.round(255 / transition)));
+                    await converters2.light_hue_saturation_move.convertSet(entity, 'hue_move', speed, meta);
+                } else if (value === 'stop_colorloop') {
+                    await converters2.light_hue_saturation_move.convertSet(entity, 'hue_move', 'stop', meta);
+                } else {
+                    const payload = {effectid: utils.getFromLookup(value, lookup), effectvariant: 0};
+                    await entity.command('genIdentify', 'triggerEffect', payload, utils.getOptions(meta.mapped, entity));
+                }
             } else if (key === 'alert' || key === 'flash') { // Deprecated
                 let effectid = 0;
                 const lookup = {'select': 0x00, 'lselect': 0x01, 'none': 0xFF};
@@ -2606,23 +2639,23 @@ const converters2 = {
         convertSet: async (entity, key, value, meta) => {
             if (key === 'lcd_brightness') {
                 const lookup = {'low': 0, 'mid': 1, 'high': 2};
-                const payload = {0x1000: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.enum8}};
+                const payload = {0x1000: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.ENUM8}};
                 await entity.write('hvacThermostat', payload, manufacturerOptions.sunricher);
             } else if (key === 'button_vibration_level') {
                 const lookup = {'off': 0, 'low': 1, 'high': 2};
-                const payload = {0x1001: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.enum8}};
+                const payload = {0x1001: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.ENUM8}};
                 await entity.write('hvacThermostat', payload, manufacturerOptions.sunricher);
             } else if (key === 'floor_sensor_type') {
                 const lookup = {'10k': 1, '15k': 2, '50k': 3, '100k': 4, '12k': 5};
-                const payload = {0x1002: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.enum8}};
+                const payload = {0x1002: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.ENUM8}};
                 await entity.write('hvacThermostat', payload, manufacturerOptions.sunricher);
             } else if (key === 'sensor') {
                 const lookup = {'air': 0, 'floor': 1, 'both': 2};
-                const payload = {0x1003: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.enum8}};
+                const payload = {0x1003: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.ENUM8}};
                 await entity.write('hvacThermostat', payload, manufacturerOptions.sunricher);
             } else if (key==='powerup_status') {
                 const lookup = {'default': 0, 'last_status': 1};
-                const payload = {0x1004: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.enum8}};
+                const payload = {0x1004: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.ENUM8}};
                 await entity.write('hvacThermostat', payload, manufacturerOptions.sunricher);
             } else if (key==='floor_sensor_calibration') {
                 utils.assertNumber(value);
@@ -2633,11 +2666,11 @@ const converters2 = {
                 await entity.write('hvacThermostat', payload, manufacturerOptions.sunricher);
             } else if (key==='mode_after_dry') {
                 const lookup = {'off': 0, 'manual': 1, 'auto': 2, 'away': 3};
-                const payload = {0x1007: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.enum8}};
+                const payload = {0x1007: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.ENUM8}};
                 await entity.write('hvacThermostat', payload, manufacturerOptions.sunricher);
             } else if (key==='temperature_display') {
                 const lookup = {'room': 0, 'floor': 1};
-                const payload = {0x1008: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.enum8}};
+                const payload = {0x1008: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.ENUM8}};
                 await entity.write('hvacThermostat', payload, manufacturerOptions.sunricher);
             } else if (key==='window_open_check') {
                 utils.assertNumber(value);
@@ -2649,7 +2682,7 @@ const converters2 = {
                 await entity.write('hvacThermostat', payload, manufacturerOptions.sunricher);
             } else if (key==='display_auto_off_enabled') {
                 const lookup = {'disabled': 0, 'enabled': 1};
-                const payload = {0x100B: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.enum8}};
+                const payload = {0x100B: {value: utils.getFromLookup(value, lookup), type: Zcl.DataType.ENUM8}};
                 await entity.write('hvacThermostat', payload, manufacturerOptions.sunricher);
             } else if (key==='alarm_airtemp_overvalue') {
                 const payload = {0x2001: {value: value, type: 0x20}};
@@ -2924,40 +2957,29 @@ const converters2 = {
         },
     } satisfies Tz.Converter,
     eurotronic_host_flags: {
-        key: ['eurotronic_host_flags', 'eurotronic_system_mode'],
+        key: ['eurotronic_host_flags', 'system_mode'],
         convertSet: async (entity, key, value, meta) => {
-            if (utils.isObject(value)) {
-                // read current eurotronic_host_flags (we will update some of them)
-                await entity.read('hvacThermostat', [0x4008], manufacturerOptions.eurotronic);
-                const currentHostFlags: KeyValueAny = meta.state.eurotronic_host_flags ? meta.state.eurotronic_host_flags : {};
-
-                // get full hostFlag object
-                const hostFlags = {...currentHostFlags, ...value};
-
-                // calculate bit value
-                let bitValue = 1; // bit 0 always 1
-                if (hostFlags.mirror_display) {
-                    bitValue |= 1 << 1;
-                }
-                if (hostFlags.boost) {
-                    bitValue |= 1 << 2;
-                }
-                if (value.hasOwnProperty('window_open') && value.window_open != currentHostFlags.window_open) {
-                    if (hostFlags.window_open) {
-                        bitValue |= 1 << 5;
-                    } else {
-                        bitValue |= 1 << 4;
-                    }
-                }
-                if (hostFlags.child_protection) {
-                    bitValue |= 1 << 7;
-                }
-
-                logger.debug(`eurotronic: host_flags object converted to ${bitValue}`, NS);
-                value = bitValue;
+            const origValue = value;
+            await entity.read('hvacThermostat', [0x4008], manufacturerOptions.eurotronic);
+            // calculate bit value
+            let bitValue = 0x01; // bit 0 always 1
+            if (meta.state.mirror_display == 'ON') {
+                bitValue |= 0x02;
             }
+            if (value == constants.thermostatSystemModes[0]) { // off
+                bitValue |= 0x20;
+            } else if (value == constants.thermostatSystemModes[4]) { // "heat"
+                bitValue |= 0x04;
+            } else { // auto
+                bitValue |= 0x10;
+            }
+            if (meta.state.child_lock == 'LOCK') {
+                bitValue |= 0x80;
+            }
+            value = bitValue;
             const payload = {0x4008: {value, type: 0x22}};
             await entity.write('hvacThermostat', payload, manufacturerOptions.eurotronic);
+            return {state: {[key]: origValue}};
         },
         convertGet: async (entity, key, meta) => {
             await entity.read('hvacThermostat', [0x4008], manufacturerOptions.eurotronic);
@@ -3001,6 +3023,61 @@ const converters2 = {
         },
         convertGet: async (entity, key, meta) => {
             await entity.read('hvacThermostat', [0x4000], manufacturerOptions.eurotronic);
+        },
+    } satisfies Tz.Converter,
+    eurotronic_child_lock: {
+        key: ['eurotronic_child_lock', 'child_lock'],
+        convertSet: async (entity, key, value, meta) => {
+            await entity.read('hvacThermostat', [0x4008], manufacturerOptions.eurotronic);
+            // calculate bit value
+            let bitValue = 0x01; // bit 0 always 1
+            if (meta.state.mirror_display == 'ON') {
+                bitValue |= 0x02;
+            }
+            if (meta.state.system_mode == constants.thermostatSystemModes[0]) { // off
+                bitValue |= 0x20;
+            } else if (meta.state.system_mode == constants.thermostatSystemModes[4]) { // "heat"
+                bitValue |= 0x04;
+            } else { // auto
+                bitValue |= 0x10;
+            }
+            if (value == 'LOCK') {
+                bitValue |= 0x80;
+            }
+            const origValue = value;
+            value = bitValue;
+            const payload = {0x4008: {value, type: 0x22}};
+            await entity.write('hvacThermostat', payload, manufacturerOptions.eurotronic);
+            return {state: {[key]: origValue}};
+        },
+    } satisfies Tz.Converter,
+    eurotronic_mirror_display: {
+        key: ['eurotronic_mirror_display', 'mirror_display'],
+        convertSet: async (entity, key, value, meta) => {
+            await entity.read('hvacThermostat', [0x4008], manufacturerOptions.eurotronic);
+            // calculate bit value
+            let bitValue = 0x01; // bit 0 always 1
+            if (value == 'ON') {
+                bitValue |= 0x02;
+            }
+            if (meta.state.system_mode == constants.thermostatSystemModes[0]) { // off
+                bitValue |= 0x20;
+            } else if (meta.state.system_mode == constants.thermostatSystemModes[4]) { // "heat"
+                bitValue |= 0x04;
+            } else { // auto
+                bitValue |= 0x10;
+            }
+            if (meta.state.child_lock == 'LOCK') {
+                bitValue |= 0x80;
+            }
+            const origValue = value;
+            value = bitValue;
+            const payload = {0x4008: {value, type: 0x22}};
+            await entity.write('hvacThermostat', payload, manufacturerOptions.eurotronic);
+            return {state: {[key]: origValue}};
+        },
+        convertGet: async (entity, key, meta) => {
+            await entity.read('hvacThermostat', [0x4008], manufacturerOptions.eurotronic);
         },
     } satisfies Tz.Converter,
     stelpro_thermostat_outdoor_temperature: {
@@ -3160,38 +3237,6 @@ const converters2 = {
         },
         convertGet: async (entity, key, meta) => {
             await entity.read('closuresWindowCovering', ['currentPositionLiftPercentage']);
-        },
-    } satisfies Tz.Converter,
-    legrand_identify: {
-        key: ['identify'],
-        convertSet: async (entity, key, value, meta) => {
-            if (utils.isObject(value) && !value.timeout) {
-                const effects = {
-                    'blink3': 0x00,
-                    'fixed': 0x01,
-                    'blinkgreen': 0x02,
-                    'blinkblue': 0x03,
-                };
-                // only works for blink3 & fixed
-                const colors = {
-                    'default': 0x00,
-                    'red': 0x01,
-                    'green': 0x02,
-                    'blue': 0x03,
-                    'lightblue': 0x04,
-                    'yellow': 0x05,
-                    'pink': 0x06,
-                    'white': 0x07,
-                };
-
-                const selectedEffect = utils.getFromLookup(value.effect, effects) | effects['blink3'];
-                const selectedColor = utils.getFromLookup(value.color, colors) | colors['default'];
-
-                const payload = {effectid: selectedEffect, effectvariant: selectedColor};
-                await entity.command('genIdentify', 'triggerEffect', payload, {});
-            } else {
-                await entity.command('genIdentify', 'identify', {identifytime: 10}, {});
-            }
         },
     } satisfies Tz.Converter,
     legrand_device_mode: {
@@ -3462,7 +3507,7 @@ const converters2 = {
                 // https://github.com/Koenkk/zigbee-herdsman/blob/v0.13.191/src/zcl/definition/cluster.ts#L4235
                 const keyToAttributeLookup = {'alarm_temperature_max': 0xD00A, 'alarm_temperature_min': 0xD00B,
                     'alarm_humidity_max': 0xD00D, 'alarm_humidity_min': 0xD00E};
-                const payload = {[keyToAttributeLookup[key]]: {value: value, type: 0x29}};
+                const payload = {[keyToAttributeLookup[key]]: {value: value, type: Zcl.DataType.INT16}};
                 await entity.write('manuSpecificTuya_2', payload);
                 break;
             }
@@ -3513,7 +3558,7 @@ const converters2 = {
         key: ['scene_store'],
         convertSet: async (entity, key, value: KeyValueAny, meta) => {
             const isGroup = utils.isGroup(entity);
-            const groupid = isGroup ? entity.groupID : value.hasOwnProperty('group_id') ? value.group_id : 0;
+            const groupid = isGroup ? entity.groupID : (value.group_id != undefined ? value.group_id : 0);
             let sceneid = value;
             let scenename = null;
             if (typeof value === 'object') {
@@ -3522,10 +3567,11 @@ const converters2 = {
             }
 
             utils.assertNumber(sceneid, 'ID');
-            if (sceneid < 1) {
-                // Don't allow ID 0, from the spec:
+
+            if (groupid === 0 && sceneid === 0) {
+                // From Zigbee spec:
                 // "Scene identifier 0x00, along with group identifier 0x0000, is reserved for the global scene used by the OnOff cluster"
-                throw new Error('ID must be at least 1');
+                throw new Error('Scene ID 0 cannot be used with group ID 0 (reserved).');
             }
 
             const response = await entity.command('genScenes', 'store', {groupid, sceneid}, utils.getOptions(meta.mapped, entity));
@@ -3610,26 +3656,23 @@ const converters2 = {
         key: ['scene_add'],
         convertSet: async (entity, key, value, meta) => {
             utils.assertObject(value);
+            utils.assertNumber(value.ID, 'ID');
 
-            if (!value.hasOwnProperty('ID')) {
-                throw new Error('Payload missing ID.');
-            }
-
-            if (value.ID < 1) {
-                // Don't allow ID 0, from the spec:
-                // "Scene identifier 0x00, along with group identifier 0x0000, is reserved for the global scene used by the OnOff cluster"
-                throw new Error('ID must be at least 1');
-            }
-
-            if (value.hasOwnProperty('color_temp') && value.hasOwnProperty('color')) {
+            if (value.color_temp != undefined && value.color != undefined) {
                 throw new Error(`Don't specify both 'color_temp' and 'color'`);
             }
 
             const isGroup = utils.isGroup(entity);
-            const groupid = isGroup ? entity.groupID : value.hasOwnProperty('group_id') ? value.group_id : 0;
+            const groupid = isGroup ? entity.groupID : (value.group_id != undefined ? value.group_id : 0);
             const sceneid = value.ID;
             const scenename = value.name;
-            const transtime = value.hasOwnProperty('transition') ? value.transition : 0;
+            const transtime = value.transition != undefined ? value.transition : 0;
+
+            if (groupid === 0 && sceneid === 0) {
+                // From Zigbee spec:
+                // "Scene identifier 0x00, along with group identifier 0x0000, is reserved for the global scene used by the OnOff cluster"
+                throw new Error('Scene ID 0 cannot be used with group ID 0 (reserved).');
+            }
 
             const state: KeyValueAny = {};
             const extensionfieldsets = [];
@@ -4146,7 +4189,7 @@ const converters2 = {
         convertSet: async (entity, key, value, meta) => {
             utils.assertEndpoint(entity);
             const keypadLockout = utils.getKey(constants.keypadLockoutMode, value, value, Number);
-            entity.write('hvacUserInterfaceCfg', {keypadLockout});
+            await entity.write('hvacUserInterfaceCfg', {keypadLockout});
             entity.saveClusterAttributeKeyValue('hvacUserInterfaceCfg', {keypadLockout});
             return {state: {keypad_lockout: value}};
         },
@@ -4232,7 +4275,7 @@ const converters2 = {
         key: ['local_temperature_calibration'],
         convertSet: async (entity, key, value, meta) => {
             utils.assertNumber(value);
-            entity.write('hvacThermostat', {localTemperatureCalibration: Math.round(value * 10)},
+            await entity.write('hvacThermostat', {localTemperatureCalibration: Math.round(value * 10)},
                 {srcEndpoint: 11, disableDefaultResponse: true});
             return {state: {local_temperature_calibration: value}};
         },
@@ -4429,29 +4472,62 @@ const converters3 = {
             }
         },
     } satisfies Tz.Converter,
-    eurotronic_thermostat_system_mode: {
-        key: ['system_mode'],
+    TS110E_options: {
+        key: ['min_brightness', 'max_brightness', 'light_type', 'switch_type'],
         convertSet: async (entity, key, value, meta) => {
-            const systemMode = utils.getKey(legacy.thermostatSystemModes, value, value, Number);
-            const hostFlags: KeyValueAny = {};
-            switch (systemMode) {
-            case 0: // off (window_open for eurotronic)
-                hostFlags['boost'] = false;
-                hostFlags['window_open'] = true;
-                break;
-            case 4: // heat (boost for eurotronic)
-                hostFlags['boost'] = true;
-                hostFlags['window_open'] = false;
-                break;
-            default:
-                hostFlags['boost'] = false;
-                hostFlags['window_open'] = false;
-                break;
+            let payload = null;
+            if (key === 'min_brightness' || key == 'max_brightness') {
+                const id = key === 'min_brightness' ? 64515 : 64516;
+                payload = {[id]: {value: utils.mapNumberRange(utils.toNumber(value, key), 1, 255, 0, 1000), type: 0x21}};
+            } else if (key === 'light_type' || key === 'switch_type') {
+                utils.assertString(value, 'light_type/switch_type');
+                const lookup: KeyValue = key === 'light_type' ? {led: 0, incandescent: 1, halogen: 2} : {momentary: 0, toggle: 1, state: 2};
+                payload = {64514: {value: lookup[value], type: 0x20}};
             }
-            await converters2.eurotronic_host_flags.convertSet(entity, 'eurotronic_host_flags', hostFlags, meta);
+            await entity.write('genLevelCtrl', payload, utils.getOptions(meta.mapped, entity));
+            return {state: {[key]: value}};
         },
         convertGet: async (entity, key, meta) => {
-            await converters2.eurotronic_host_flags.convertGet(entity, 'eurotronic_host_flags', meta);
+            let id = null;
+            if (key === 'min_brightness') id = 64515;
+            if (key === 'max_brightness') id = 64516;
+            if (key === 'light_type' || key === 'switch_type') id = 64514;
+            await entity.read('genLevelCtrl', [id]);
+        },
+    } satisfies Tz.Converter,
+    TS110E_onoff_brightness: {
+        key: ['state', 'brightness'],
+        convertSet: async (entity, key, value, meta) => {
+            const {message, state} = meta;
+            if (message.state === 'OFF' || (message.hasOwnProperty('state') && !message.hasOwnProperty('brightness'))) {
+                return await converters1.on_off.convertSet(entity, key, value, meta);
+            } else if (message.hasOwnProperty('brightness')) {
+                // set brightness
+                if (state.state === 'OFF') {
+                    await entity.command('genOnOff', 'on', {}, utils.getOptions(meta.mapped, entity));
+                }
+
+                const brightness = utils.toNumber(message.brightness, 'brightness');
+                const level = utils.mapNumberRange(brightness, 0, 254, 0, 1000);
+                await entity.command('genLevelCtrl', 'moveToLevelTuya', {level, transtime: 100}, utils.getOptions(meta.mapped, entity));
+                return {state: {state: 'ON', brightness}};
+            }
+        },
+        convertGet: async (entity, key, meta) => {
+            if (key === 'state') await converters1.on_off.convertGet(entity, key, meta);
+            if (key === 'brightness') await entity.read('genLevelCtrl', [61440]);
+        },
+    } satisfies Tz.Converter,
+    TS110E_light_onoff_brightness: {
+        ...converters2.light_onoff_brightness,
+        convertSet: async (entity, key, value, meta) => {
+            const {message} = meta;
+            if (message.state === 'ON' || (typeof message.brightness === 'number' && message.brightness > 1)) {
+                // Does not turn off with physical press when turned on with just moveToLevelWithOnOff, required on before.
+                // https://github.com/Koenkk/zigbee2mqtt/issues/15902#issuecomment-1382848150
+                await entity.command('genOnOff', 'on', {}, utils.getOptions(meta.mapped, entity));
+            }
+            return converters2.light_onoff_brightness.convertSet(entity, key, value, meta);
         },
     } satisfies Tz.Converter,
 };
